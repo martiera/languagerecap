@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
-import { DEMO_USER_ID, pool } from '@/lib/db';
+import { pool } from '@/lib/db';
+import { requireUser } from '@/lib/auth';
 import { isRegularItalianVerb } from '@/lib/italian-conjugation';
 import { supportsLanguage } from '@/lib/languages';
 
 export async function POST(request: Request) {
   const client = await pool.connect();
   try {
+    const user = await requireUser(request);
     const { words, targetLanguage, sourceLanguage = 'en', shortStory, title } = await request.json();
     if (!Array.isArray(words) || !words.length || typeof targetLanguage !== 'string' || !supportsLanguage(targetLanguage) || typeof sourceLanguage !== 'string' || !supportsLanguage(sourceLanguage) || sourceLanguage === targetLanguage) {
       return NextResponse.json({ error: 'Select words and two different supported languages.' }, { status: 400 });
@@ -13,7 +15,7 @@ export async function POST(request: Request) {
     await client.query('BEGIN');
     const lesson = await client.query(
       'INSERT INTO lessons (user_id, language_code, title, raw_notes, short_story) VALUES ($1,$2,$3,$4,$5) RETURNING id',
-      [DEMO_USER_ID, targetLanguage, title || 'Untitled lesson', '', shortStory || ''],
+      [user.id, targetLanguage, title || 'Untitled lesson', '', shortStory || ''],
     );
     let saved = 0;
     let skipped = 0;
@@ -48,7 +50,7 @@ export async function POST(request: Request) {
          VALUES ($1,$2,$3)
          ON CONFLICT (user_id, lexeme_id) DO UPDATE SET selected_sense_id=COALESCE(user_lexemes.selected_sense_id, EXCLUDED.selected_sense_id)
          RETURNING (xmax = 0) AS inserted`,
-        [DEMO_USER_ID, lexemeId, senseId],
+        [user.id, lexemeId, senseId],
       );
       if (mapping.rows[0].inserted) saved += 1;
       else skipped += 1;
@@ -73,7 +75,7 @@ export async function POST(request: Request) {
           `INSERT INTO user_lexeme_conjugations (user_id, conjugation_id)
            VALUES ($1,$2)
            ON CONFLICT (user_id, conjugation_id) DO NOTHING`,
-          [DEMO_USER_ID, conjugationId],
+          [user.id, conjugationId],
         );
         if (conjugationResult.rows[0].inserted) savedConjugations += 1;
         else skippedConjugations += 1;
@@ -82,6 +84,7 @@ export async function POST(request: Request) {
     await client.query('COMMIT');
     return NextResponse.json({ lessonId: lesson.rows[0].id, saved, skipped, savedConjugations, skippedConjugations });
   } catch (error) {
+    if (error instanceof Response) return error;
     await client.query('ROLLBACK');
     console.error(error);
     return NextResponse.json({ error: 'Could not save the lesson.' }, { status: 500 });

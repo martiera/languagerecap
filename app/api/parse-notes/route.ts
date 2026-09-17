@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getLanguage } from '@/lib/languages';
+import { requireUser } from '@/lib/auth';
 
 type GeminiResult = { vocabulary: { targetText: string; translation: string; type: string; isIrregular?: boolean; conjugations?: { tense: string; person: string; form: string; translation: string }[] }[]; shortStory: string; quizzes: { sentence: string; options: string[]; answer: string }[] };
 export async function POST(request: Request) {
   try {
+    await requireUser(request);
     const { notes, sourceLanguage, targetLanguage, extractConjugations } = await request.json();
     if (typeof notes !== 'string' || notes.trim().length < 3 || typeof sourceLanguage !== 'string' || typeof targetLanguage !== 'string' || sourceLanguage === targetLanguage) return NextResponse.json({ error: 'Choose two different source and target languages, then add lesson notes.' }, { status: 400 });
     const source = getLanguage(sourceLanguage);
@@ -26,5 +28,5 @@ export async function POST(request: Request) {
     if (!text) throw new Error('Gemini returned no content');
     const result: GeminiResult = JSON.parse(text.replace(/^```json\s*|\s*```$/g, ''));
     return NextResponse.json(result);
-  } catch (error) { console.error(error); return NextResponse.json({ error: 'Could not parse these notes. Try again.' }, { status: 500 }); }
+  } catch (error) { if (error instanceof Response) return error; console.error(error); return NextResponse.json({ error: 'Could not parse these notes. Try again.' }, { status: 500 }); }
 }
