@@ -11,7 +11,6 @@ The current Docker Compose deployment is a single-instance setup. It should be t
 - PostgreSQL runs as one local container with one persistent volume.
 - Automated backups, point-in-time recovery, failover, read replicas, and restore testing are not configured.
 - Database connection-pool sizing, query timeouts, and backpressure are not explicitly configured.
-- Authentication and real user isolation are not complete; routes still rely on the demo user.
 - Gemini parsing runs synchronously inside an HTTP request.
 - AI requests have no job queue, idempotency, quota controls, or application-level rate limiting.
 - Review and forms queries need query-plan checks and realistic-volume load testing.
@@ -30,15 +29,14 @@ The intended future baseline is managed production with automated backups and ba
 4. Move Gemini parsing, lesson generation, and other slow operations to background jobs with persisted status, retries, and idempotency keys.
 5. Add centralized logs, metrics, traces, health/readiness checks, and alerts.
 6. Use Redis or an equivalent shared service only for measured cache, rate-limit, and job-coordination needs.
-7. Use a CDN/object storage layer for static assets and future media.
-8. Use versioned, backward-compatible migrations with an expand/contract rollout and rollback plan.
+7. Use versioned, backward-compatible migrations with an expand/contract rollout and rollback plan.
 
 ## Staged implementation
 
 ### Stage 1: Harden one instance
 
 - Implement authentication and server-side user isolation.
-- Validate all request bodies, language codes, identifiers, and model output.
+- Validate request bodies, language codes, identifiers, and model output.
 - Add database pool limits, timeouts, indexes, and pagination.
 - Add rate limits and input-size limits for AI endpoints.
 - Configure backups and verify restoration.
@@ -54,11 +52,10 @@ The intended future baseline is managed production with automated backups and ba
 
 ### Stage 3: Scale application instances
 
-- Run multiple stateless app replicas.
-- Put them behind a load balancer.
+- Run multiple stateless app replicas behind a load balancer.
 - Add readiness and liveness checks.
 - Use rolling deployments and automated rollback.
-- Verify that no correctness-critical state is stored only in process memory.
+- Verify that correctness-critical state is not stored only in process memory.
 
 ### Stage 4: Optimize measured bottlenecks
 
@@ -72,22 +69,9 @@ The intended future baseline is managed production with automated backups and ba
 - Keep mastery, due dates, review history, and personal notes user-specific.
 - Preserve foreign keys and normalized uniqueness constraints.
 - Review `EXPLAIN (ANALYZE, BUFFERS)` plans at realistic data volumes.
-- Index the actual access patterns, especially user/language/due-review queries.
+- Index actual access patterns, especially user/language/due-review queries.
 - Bound response sizes and paginate lessons, words, and review queues.
 - Define retention and archival policies for review history and generated content.
-
-## Release checklist
-
-- [ ] Authentication and user isolation verified.
-- [ ] Database backup and restore tested.
-- [ ] Schema migrations tested on a production-like copy.
-- [ ] Connection limits and statement timeouts configured.
-- [ ] AI rate limits, quotas, retries, and idempotency implemented.
-- [ ] Health/readiness endpoints monitored.
-- [ ] Centralized logs, metrics, traces, and alerts configured.
-- [ ] Load tests completed for expected traffic.
-- [ ] Rolling deployment and rollback tested.
-- [ ] Current bottlenecks measured before adding cache, replicas, or regional infrastructure.
 
 ## Decision rule
 
