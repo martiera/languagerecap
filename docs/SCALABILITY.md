@@ -39,9 +39,16 @@ The intended future baseline is managed production with automated backups and ba
 - Validate request bodies, language codes, identifiers, and model output.
 - Add database pool limits, timeouts, indexes, and pagination.
 - Add rate limits and input-size limits for AI endpoints.
+- Treat lesson notes and generated model output as untrusted data: isolate them from trusted instructions, verify generated lessons before persistence, and bound both request frequency and model output size.
 - Configure backups and verify restoration.
 - Add structured errors, logs, health checks, and basic metrics.
 - Load-test the main review, save, statistics, and parsing paths.
+
+## Gemini trust boundary
+
+Lesson notes are untrusted user content and may contain prompt-injection attempts. The parser rejects strong model-directed instructions before calling Gemini, passes notes only as delimited data, uses trusted system instructions, disables unnecessary model capabilities, and verifies the proposed lesson with a separate constrained model pass before returning it. Structural validation alone is not sufficient.
+
+AI parsing also uses authenticated per-user and IP quotas, short request deadlines, bounded retries, and maximum output tokens. Verification adds latency and cost, so production monitoring should track rejection rate, verifier failures, model latency, token usage, and quota exhaustion. The verifier is defense in depth, not a proof of semantic safety; generated text must remain inert display data and must never be executed or interpolated into SQL.
 
 ### Stage 2: Separate slow work
 

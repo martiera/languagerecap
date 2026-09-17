@@ -3,7 +3,7 @@ import Link from 'next/link';
 export default function DemoPage() {
   return <main className="shell grid-paper min-h-screen"><div className="mx-auto max-w-6xl px-5 py-6 md:px-10 md:py-9">
     <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#173c3b22] pb-6">
-      <Link href="/demo" className="flex items-center gap-2"><span className="text-2xl">◒</span><span className="serif text-2xl font-bold">LanguageRecap</span></Link>
+      <Link href="/" className="flex items-center gap-2"><span className="text-2xl">◒</span><span className="serif text-2xl font-bold">LanguageRecap</span></Link>
       <div className="flex items-center gap-3 text-sm font-bold"><span className="pill bg-[#e5b94e44]">Read-only demo</span><Link href="/login?register=true" className="rounded-md bg-[#173c3b] px-4 py-2 text-white">Create account</Link></div>
     </header>
     <section className="py-10"><span className="pill bg-[#b7c9ad66]">Demo · sample Italian lesson</span><h1 className="serif mt-5 text-5xl font-bold">See the real learning flow.</h1><p className="mt-4 max-w-2xl leading-7 text-[#6f7e76]">This sample uses the same vocabulary review and staged verb-form practice as the app. Answers advance locally; nothing is saved.</p></section>
