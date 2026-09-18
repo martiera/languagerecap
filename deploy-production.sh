@@ -36,6 +36,21 @@ printf 'Pulling %s...\n' "$APP_IMAGE"
 printf '%s\n' 'Starting PostgreSQL...'
 "${compose[@]}" up -d db
 
+printf '%s\n' 'Waiting for PostgreSQL to become ready...'
+db_ready=0
+for attempt in {1..30}; do
+  if "${compose[@]}" exec -T db sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null 2>&1; then
+    db_ready=1
+    break
+  fi
+  sleep 2
+done
+if (( ! db_ready )); then
+  printf '%s\n' 'PostgreSQL did not become ready in time.' >&2
+  "${compose[@]}" logs --tail 50 db >&2 || true
+  exit 1
+fi
+
 printf '%s\n' 'Applying schema and migrations...'
 "${compose[@]}" exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /docker-entrypoint-initdb.d/001-schema.sql'
 "${compose[@]}" exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT NOW())"'

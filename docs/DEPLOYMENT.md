@@ -71,6 +71,8 @@ NEXT_PUBLIC_APP_URL=https://your-domain.example
 PORT=3000
 ```
 
+The two Gemini model variables may remain empty; defining them explicitly avoids Compose warnings.
+
 Create it on the Droplet, not in the repository:
 
 ```bash
