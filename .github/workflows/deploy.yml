@@ -122,9 +122,9 @@ jobs:
           scp -i "$HOME/.ssh/deploy_key" -r migrations/. \
             "$DROPLET_USER@$DROPLET_HOST:/tmp/languagerecap-migrations/"
           ssh -i "$HOME/.ssh/deploy_key" "$DROPLET_USER@$DROPLET_HOST" \
-            "sudo install -d -m 755 /opt/languagerecap/lib /opt/languagerecap/migrations && \
-             sudo install -m 755 /tmp/deploy-production.sh /opt/languagerecap/deploy-production.sh && \
-             sudo install -m 644 /tmp/docker-compose.production.yml /opt/languagerecap/docker-compose.production.yml && \
-             sudo install -m 644 /tmp/schema.sql /opt/languagerecap/lib/schema.sql && \
-             sudo cp -a /tmp/languagerecap-migrations/. /opt/languagerecap/migrations/ && \
-             sudo /opt/languagerecap/deploy-production.sh '$IMAGE_REFERENCE'"
+            "install -d -m 755 /opt/languagerecap/lib /opt/languagerecap/migrations && \
+             install -m 755 /tmp/deploy-production.sh /opt/languagerecap/deploy-production.sh && \
+             install -m 644 /tmp/docker-compose.production.yml /opt/languagerecap/docker-compose.production.yml && \
+             install -m 644 /tmp/schema.sql /opt/languagerecap/lib/schema.sql && \
+             cp -a /tmp/languagerecap-migrations/. /opt/languagerecap/migrations/ && \
+             /opt/languagerecap/deploy-production.sh '$IMAGE_REFERENCE'"

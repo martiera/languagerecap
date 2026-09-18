@@ -41,7 +41,14 @@ Install Docker Engine, the Docker Compose plugin, `curl`, and `ca-certificates`.
 
 The `.env` file must contain production-only values for PostgreSQL, `DATABASE_URL`, `AUTH_SECRET`, `GEMINI_API_KEY`, `NEXT_PUBLIC_APP_URL`, and optional model names. Never commit it.
 
-The deployment user needs permission to run Docker and to install the deployment script under `/opt/languagerecap`. The server must already be authenticated to private GHCR with a read-only deploy token:
+The deployment user needs permission to run Docker and must own `/opt/languagerecap`, because GitHub Actions installs the deployment files there without an interactive `sudo` password:
+
+```bash
+mkdir -p /opt/languagerecap
+chown -R deploy:deploy /opt/languagerecap
+```
+
+The server must already be authenticated to private GHCR with a read-only deploy token:
 
 ```bash
 echo "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
