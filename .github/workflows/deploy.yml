@@ -7,11 +7,18 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      deploy:
-        description: Deploy the built image to the Droplet
+      deployment_mode:
+        description: Choose whether to build or reuse an existing image
         required: true
-        default: false
-        type: boolean
+        default: build_and_deploy
+        type: choice
+        options:
+          - build_and_deploy
+          - deploy_existing
+      image_sha:
+        description: Existing main-branch commit SHA (blank uses the selected commit)
+        required: false
+        type: string
 
 concurrency:
   group: production-deployment
@@ -19,6 +26,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
@@ -32,36 +40,74 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Log in to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
+
+      - name: Resolve image reference
+        id: image
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_SHA_INPUT: ${{ inputs.image_sha }}
+        run: |
+          set -euo pipefail
+          image_sha="$IMAGE_SHA_INPUT"
+          if [[ -z "$image_sha" ]]; then
+            image_sha="${GITHUB_SHA}"
+          fi
+          image_sha="${image_sha,,}"
+          if [[ ! "$image_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            printf 'Image SHA must be exactly 40 hexadecimal characters.\n' >&2
+            exit 1
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.deployment_mode }}" == "deploy_existing" ]]; then
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$image_sha" origin/main; then
+              printf 'Image SHA %s is not reachable from origin/main.\n' "$image_sha" >&2
+              exit 1
+            fi
+            image_reference="$IMAGE_NAME:$image_sha"
+            if ! docker manifest inspect "$image_reference" >/dev/null 2>&1; then
+              printf 'GHCR image %s was not found or is not accessible.\n' "$image_reference" >&2
+              exit 1
+            fi
+          else
+            image_reference="$IMAGE_NAME:${GITHUB_SHA}"
+          fi
+
+          printf 'image_reference=%s\n' "$image_reference" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
+        if: github.event_name != 'workflow_dispatch' || inputs.deployment_mode == 'build_and_deploy'
         uses: docker/setup-buildx-action@v3
 
       - name: Build image
+        if: github.event_name != 'workflow_dispatch' || inputs.deployment_mode == 'build_and_deploy'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.deploy) }}
+          push: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deployment_mode == 'build_and_deploy') }}
           tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Deploy to Droplet
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.deploy)
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
           DROPLET_USER: ${{ secrets.DROPLET_USER }}
           DROPLET_SSH_PRIVATE_KEY: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }}
           DROPLET_KNOWN_HOSTS: ${{ secrets.DROPLET_KNOWN_HOSTS }}
-          IMAGE_REFERENCE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          IMAGE_REFERENCE: ${{ steps.image.outputs.image_reference }}
         run: |
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$DROPLET_SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"

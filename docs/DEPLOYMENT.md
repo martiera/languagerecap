@@ -13,7 +13,12 @@ The Droplet does not run `docker compose build`. This keeps the memory-heavy Nex
 
 ## GitHub configuration
 
-The workflow is `.github/workflows/deploy.yml`. It builds pull requests, publishes on pushes to `main`, and deploys only from `main`.
+The workflow is `.github/workflows/deploy.yml`. It builds pull requests, publishes and deploys on pushes to `main`, and provides two manual deployment modes:
+
+- `build_and_deploy`: build and publish the selected commit, then deploy it.
+- `deploy_existing`: deploy an already-published SHA-tagged image without rebuilding it. The SHA must be reachable from `main`; leaving `image_sha` blank uses the selected workflow commit.
+
+For a failed deployment after a successful build, run the workflow manually with `deploy_existing` and enter the SHA from the successful build. This reuses the immutable GHCR image.
 
 Add these repository secrets:
 
