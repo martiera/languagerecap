@@ -6,17 +6,17 @@ GitHub Actions builds the production image on a GitHub-hosted runner and publish
 
 ```text
 pull request -> build validation
-push to main -> build -> GHCR -> SSH -> Droplet pulls image -> migrations -> health check
+push to master -> build -> GHCR -> SSH -> Droplet pulls image -> migrations -> health check
 ```
 
 The Droplet does not run `docker compose build`. This keeps the memory-heavy Next.js build off a 1 GB server.
 
 ## GitHub configuration
 
-The workflow is `.github/workflows/deploy.yml`. It builds pull requests, publishes and deploys on pushes to `main`, and provides two manual deployment modes:
+The workflow is `.github/workflows/deploy.yml`. It builds pull requests, publishes and deploys on pushes to `master`, and provides two manual deployment modes:
 
 - `build_and_deploy`: build and publish the selected commit, then deploy it.
-- `deploy_existing`: deploy an already-published SHA-tagged image without rebuilding it. The SHA must be reachable from `main`; leaving `image_sha` blank uses the selected workflow commit.
+- `deploy_existing`: deploy an already-published SHA-tagged image without rebuilding it. The SHA must be reachable from `master`; leaving `image_sha` blank uses the selected workflow commit.
 
 For a failed deployment after a successful build, run the workflow manually with `deploy_existing` and enter the SHA from the successful build. This reuses the immutable GHCR image.
 
@@ -47,7 +47,7 @@ The deployment user needs permission to run Docker and to install the deployment
 echo "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 ```
 
-Create the initial `/opt/languagerecap` directory and `.env`, and ensure the database volume is persistent. Each main-branch deployment transfers the production Compose file, schema, migrations, and deployment script automatically. PostgreSQL should not be publicly exposed; allow only SSH, HTTP, and HTTPS through the firewall.
+Create the initial `/opt/languagerecap` directory and `.env`, and ensure the database volume is persistent. Each `master` deployment transfers the production Compose file, schema, migrations, and deployment script automatically. PostgreSQL should not be publicly exposed; allow only SSH, HTTP, and HTTPS through the firewall.
 
 ## Deployment and rollback
 

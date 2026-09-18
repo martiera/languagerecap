@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - main
+      - master
   workflow_dispatch:
     inputs:
       deployment_mode:
@@ -16,7 +16,7 @@ on:
           - build_and_deploy
           - deploy_existing
       image_sha:
-        description: Existing main-branch commit SHA (blank uses the selected commit)
+        description: Existing master-branch commit SHA (blank uses the selected commit)
         required: false
         type: string
 
@@ -69,9 +69,9 @@ jobs:
           fi
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.deployment_mode }}" == "deploy_existing" ]]; then
-            git fetch --no-tags origin main
-            if ! git merge-base --is-ancestor "$image_sha" origin/main; then
-              printf 'Image SHA %s is not reachable from origin/main.\n' "$image_sha" >&2
+            git fetch --no-tags origin master
+            if ! git merge-base --is-ancestor "$image_sha" origin/master; then
+              printf 'Image SHA %s is not reachable from origin/master.\n' "$image_sha" >&2
               exit 1
             fi
             image_reference="$IMAGE_NAME:$image_sha"
