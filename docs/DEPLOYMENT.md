@@ -56,6 +56,30 @@ echo "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-st
 
 Create the initial `/opt/languagerecap` directory and `.env`, and ensure the database volume is persistent. Each `master` deployment transfers the production Compose file, schema, migrations, and deployment script automatically. PostgreSQL should not be publicly exposed; allow only SSH, HTTP, and HTTPS through the firewall.
 
+Example `.env` structure (replace every placeholder with a real value):
+
+```dotenv
+POSTGRES_USER=languagerecap
+POSTGRES_PASSWORD=replace-with-a-long-random-password
+POSTGRES_DB=languagerecap
+DATABASE_URL=postgresql://languagerecap:YOUR_DB_PASSWORD@db:5432/languagerecap
+AUTH_SECRET=replace-with-at-least-32-random-bytes
+GEMINI_API_KEY=replace-with-your-gemini-key
+GEMINI_MODEL=
+GEMINI_VERIFIER_MODEL=
+NEXT_PUBLIC_APP_URL=https://your-domain.example
+PORT=3000
+```
+
+Create it on the Droplet, not in the repository:
+
+```bash
+umask 077
+nano /opt/languagerecap/.env
+chown deploy:deploy /opt/languagerecap/.env
+chmod 600 /opt/languagerecap/.env
+```
+
 ## Deployment and rollback
 
 The workflow transfers `deploy-production.sh` and invokes it with the immutable image reference. The script:

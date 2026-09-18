@@ -11,8 +11,14 @@ if [[ -z "$APP_IMAGE" ]]; then
   printf 'Usage: %s <image-reference>\n' "$0" >&2
   exit 64
 fi
-if [[ ! -f "$COMPOSE_FILE" || ! -f "$ENV_FILE" ]]; then
-  printf 'Missing production Compose file or environment file.\n' >&2
+missing_file=0
+for required_file in "$COMPOSE_FILE" "$ENV_FILE"; do
+  if [[ ! -f "$required_file" ]]; then
+    printf 'Missing required deployment file: %s\n' "$required_file" >&2
+    missing_file=1
+  fi
+done
+if (( missing_file )); then
   exit 1
 fi
 
