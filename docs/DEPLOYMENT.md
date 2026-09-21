@@ -29,6 +29,13 @@ Add these repository secrets:
 
 The workflow uses `GITHUB_TOKEN` with `packages: write` to publish to GHCR. The image remains private.
 
+The numbered migrations also seed a read-only demo account at
+`demo@languagerecap.local` with sample Italian vocabulary. The public **Try the
+demo** link creates a session for this account and opens the normal dashboard
+and review pages. Migrations also seed representative conjugations for all
+forms stages. Demo review answers are evaluated but never change the shared
+account's SRS state; lesson parsing and saving are blocked.
+
 ## Droplet setup
 
 Install Docker Engine, the Docker Compose plugin, `curl`, and `ca-certificates`. Create `/opt/languagerecap` and place these files there:

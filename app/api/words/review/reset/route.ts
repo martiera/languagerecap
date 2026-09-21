@@ -5,6 +5,7 @@ import { requireUser } from '@/lib/auth';
 export async function POST(request: Request) {
   try {
     const user = await requireUser(request);
+    if (user.isDemo) return NextResponse.json({ reset: 0 });
     const language = new URL(request.url).searchParams.get('language');
     const filter = language ? ' AND l.language_code=$2' : '';
     const params = language ? [user.id, language] : [user.id];

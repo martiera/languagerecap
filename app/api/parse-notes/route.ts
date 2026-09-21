@@ -120,6 +120,7 @@ function validateVerificationResult(value: unknown): VerificationResult {
 export async function POST(request: Request) {
   try {
     const user = await requireUser(request);
+    if (user.isDemo) return NextResponse.json({ error: 'The demo account is read-only.' }, { status: 403 });
     const contentLength = Number(request.headers.get('content-length') || 0);
     if (contentLength > MAX_REQUEST_BYTES) return NextResponse.json({ error: 'The lesson request is too large.' }, { status: 413 });
     const { notes, sourceLanguage, targetLanguage, extractConjugations } = await request.json();

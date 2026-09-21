@@ -45,20 +45,28 @@ export async function createSession(userId: string) {
 }
 
 export async function authenticateUser(email: string, password: string) {
-  const result = await pool.query('SELECT id, email, password_hash FROM app_users WHERE email=$1', [email.toLowerCase()]);
+  const result = await pool.query('SELECT id, email, password_hash, is_demo FROM app_users WHERE email=$1', [email.toLowerCase()]);
   const user = result.rows[0];
   if (!user || !(await verifyPassword(password, user.password_hash))) return null;
-  return { id: user.id as string, email: user.email as string };
+  return { id: user.id as string, email: user.email as string, isDemo: Boolean(user.is_demo) };
 }
 
 export async function getCurrentUser(request?: Request) {
   const token = request?.headers.get('cookie')?.match(/(?:^|; )languagerecap_session=([^;]+)/)?.[1] ?? (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
   const result = await pool.query(
-    'SELECT u.id, u.email FROM app_sessions s JOIN app_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>NOW()',
+    'SELECT u.id, u.email, u.is_demo FROM app_sessions s JOIN app_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>NOW()',
     [hashToken(token)],
   );
-  return result.rows[0] ? { id: result.rows[0].id as string, email: result.rows[0].email as string } : null;
+  return result.rows[0] ? { id: result.rows[0].id as string, email: result.rows[0].email as string, isDemo: Boolean(result.rows[0].is_demo) } : null;
+}
+
+export const DEMO_USER_EMAIL = 'demo@languagerecap.local';
+
+export async function createDemoSession() {
+  const result = await pool.query('SELECT id, email FROM app_users WHERE email=$1 AND is_demo=TRUE', [DEMO_USER_EMAIL]);
+  if (!result.rows[0]) throw new Error('Demo account is not configured.');
+  return { user: { id: result.rows[0].id as string, email: result.rows[0].email as string }, token: await createSession(result.rows[0].id as string) };
 }
 
 export async function requireUser(request: Request) {

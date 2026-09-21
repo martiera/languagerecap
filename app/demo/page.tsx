@@ -1,17 +1,33 @@
-import Link from 'next/link';
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 export default function DemoPage() {
-  return <main className="shell grid-paper min-h-screen"><div className="mx-auto max-w-6xl px-5 py-6 md:px-10 md:py-9">
-    <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#173c3b22] pb-6">
-      <Link href="/" className="flex items-center gap-2"><span className="text-2xl">◒</span><span className="serif text-2xl font-bold">LanguageRecap</span></Link>
-      <div className="flex items-center gap-3 text-sm font-bold"><span className="pill bg-[#e5b94e44]">Read-only demo</span><Link href="/login?register=true" className="rounded-md bg-[#173c3b] px-4 py-2 text-white">Create account</Link></div>
-    </header>
-    <section className="py-10"><span className="pill bg-[#b7c9ad66]">Demo · sample Italian lesson</span><h1 className="serif mt-5 text-5xl font-bold">See the real learning flow.</h1><p className="mt-4 max-w-2xl leading-7 text-[#6f7e76]">This sample uses the same vocabulary review and staged verb-form practice as the app. Answers advance locally; nothing is saved.</p></section>
-    <section className="grid grid-cols-2 gap-3 pb-10 md:grid-cols-4">{[['LESSONS','1'],['WORDS','20'],['MASTERED','8'],['DUE NOW','20']].map(([label,value])=><div key={label} className="border-l-2 border-[#e56f50] px-4"><div className="serif text-3xl font-bold">{value}</div><div className="mt-1 text-[10px] font-bold tracking-[.18em] text-[#6f7e76]">{label}</div></div>)}</section>
-    <div className="grid gap-8 lg:grid-cols-[1.1fr_.9fr]">
-      <section className="panel p-6 md:p-8"><span className="pill bg-[#e5b94e44]">Your sample progress</span><h2 className="serif mt-4 text-3xl font-bold">Ready for a review.</h2><p className="mt-3 max-w-lg leading-7 text-[#6f7e76]">The dashboard stays focused on progress and the next useful action. Your vocabulary grows behind the scenes and appears in review when it is due.</p><div className="mt-7 grid gap-3 sm:grid-cols-3"><div className="rounded-md bg-[#f5f1e9] p-4"><div className="serif text-2xl font-bold">12</div><div className="mt-1 text-xs font-bold uppercase tracking-[.12em] text-[#6f7e76]">Words ready</div></div><div className="rounded-md bg-[#f5f1e9] p-4"><div className="serif text-2xl font-bold">6</div><div className="mt-1 text-xs font-bold uppercase tracking-[.12em] text-[#6f7e76]">Verb forms</div></div><div className="rounded-md bg-[#f5f1e9] p-4"><div className="serif text-2xl font-bold">1</div><div className="mt-1 text-xs font-bold uppercase tracking-[.12em] text-[#6f7e76]">Lesson</div></div></div><div className="mt-7 flex flex-wrap gap-3"><Link href="/demo/review" className="rounded-md bg-[#e56f50] px-4 py-3 text-sm font-bold text-white">Try vocabulary review →</Link><Link href="/demo/forms" className="rounded-md border border-[#173c3b] px-4 py-3 text-sm font-bold text-[#173c3b]">Try verb forms</Link></div></section>
-      <aside className="panel p-6 md:p-8"><span className="pill bg-[#b7c9ad66]">How it works</span><h2 className="serif mt-5 text-3xl font-bold text-[#173c3b]">Your notes become a rhythm.</h2><div className="mt-7 grid gap-5 text-sm leading-6 text-[#6f7e76]"><p><strong className="text-[#e56f50]">1. Capture.</strong> Bring notes from a real class, tutor, or conversation.</p><p><strong className="text-[#e56f50]">2. Curate.</strong> Keep the words and phrases that matter to you.</p><p><strong className="text-[#e56f50]">3. Review.</strong> Practice vocabulary and unlock deeper verb-form stages over time.</p></div></aside>
-    </div>
-    <div className="mt-8 border-t border-[#173c3b22] pt-6 text-sm text-[#6f7e76]">Sample only. Create an account to save your own lessons, progress, and review schedule.</div>
+  const router = useRouter();
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/auth/demo', { method: 'POST' })
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'The demo is temporarily unavailable.');
+      })
+      .then(() => {
+        localStorage.setItem('languagerecap-learning-language', 'it');
+        localStorage.setItem('languagerecap-native-language', 'en');
+        router.replace('/learn');
+      })
+      .catch(reason => {
+        if (active) setError(reason instanceof Error ? reason.message : 'The demo is temporarily unavailable.');
+      });
+    return () => {
+      active = false;
+    };
+  }, [router]);
+
+  return <main className="shell grid-paper min-h-screen"><div className="mx-auto max-w-xl px-5 py-20 text-center">
+    {error ? <><h1 className="serif text-4xl font-bold">Demo unavailable</h1><p className="mt-4 text-[#e56f50]">{error}</p></> : <><div className="text-5xl">◒</div><h1 className="serif mt-6 text-4xl font-bold">Opening the live demo...</h1><p className="mt-4 text-[#6f7e76]">Loading a seeded, read-only Italian workspace.</p></>}
   </div></main>;
 }

@@ -8,6 +8,7 @@ export async function POST(request: Request) {
   const client = await pool.connect();
   try {
     const user = await requireUser(request);
+    if (user.isDemo) return NextResponse.json({ error: 'The demo account is read-only.' }, { status: 403 });
     const { words, targetLanguage, sourceLanguage = 'en', shortStory, title } = await request.json();
     if (!Array.isArray(words) || !words.length || typeof targetLanguage !== 'string' || !supportsLanguage(targetLanguage) || typeof sourceLanguage !== 'string' || !supportsLanguage(sourceLanguage) || sourceLanguage === targetLanguage) {
       return NextResponse.json({ error: 'Select words and two different supported languages.' }, { status: 400 });
