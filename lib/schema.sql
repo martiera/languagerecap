@@ -20,9 +20,12 @@ CREATE INDEX IF NOT EXISTS app_sessions_expiry_idx ON app_sessions(expires_at);
 
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID UNIQUE REFERENCES app_users(id) ON DELETE CASCADE,
   native_language_code TEXT NOT NULL DEFAULT 'en',
-  active_target_language_code TEXT NOT NULL DEFAULT 'it'
+  active_target_language_code TEXT NOT NULL DEFAULT 'it',
+  active_source_language_code TEXT NOT NULL DEFAULT 'en'
 );
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS active_source_language_code TEXT NOT NULL DEFAULT 'en';
 CREATE TABLE IF NOT EXISTS lessons (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL, language_code TEXT NOT NULL,
   title TEXT NOT NULL, raw_notes TEXT NOT NULL, short_story TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT NOW()
