@@ -47,6 +47,7 @@ Install Docker Engine, the Docker Compose plugin, `curl`, `ca-certificates`, and
 - `migrations/`
 - `.env`
 - `secrets/`
+- `provision-production-secrets.sh`
 
 The deployment user should own `/opt/languagerecap`, use a dedicated account, and have only the Docker permissions required by the deployment model. Keep SSH password login disabled and verify the host key independently.
 
@@ -84,19 +85,23 @@ Use mode 0600 for this file. `PUBLIC_HOSTNAME` and `ACME_EMAIL` are deployment-t
 
 ## Docker secrets
 
-Create secret files on the Droplet, not in the repository:
+Secret files are provisioned manually on the Droplet, not in the repository or GitHub Actions. After the first workflow run transfers the helper, run it as the deployment user:
 
 ```bash
-install -d -m 700 /opt/languagerecap/secrets
-printf '%s' 'replace-with-a-long-random-postgres-password' > /opt/languagerecap/secrets/postgres_password
-printf '%s' 'postgresql://languagerecap:replace-with-a-long-random-postgres-password@db:5432/languagerecap' > /opt/languagerecap/secrets/database_url
-printf '%s' 'replace-with-at-least-32-random-bytes' > /opt/languagerecap/secrets/auth_secret
-printf '%s' 'replace-with-your-gemini-key' > /opt/languagerecap/secrets/gemini_api_key
-chmod 600 /opt/languagerecap/secrets/*
-chown -R deploy:deploy /opt/languagerecap/secrets
+/opt/languagerecap/provision-production-secrets.sh
 ```
 
-The app reads secret values from `/run/secrets`. Secret values are not passed as ordinary Compose environment variables. Rotate a secret by replacing the file with mode 0600, recreating the affected service, and removing the old value from the host.
+The helper prompts without echoing values, rejects empty values and malformed database URLs, requires an auth secret of at least 32 characters, writes through a private temporary directory, and sets mode `0600` on the four final files. The database URL must use the same PostgreSQL credentials configured by `POSTGRES_USER`, `POSTGRES_DB`, and `postgres_password`, for example `postgresql://languagerecap:PASSWORD@db:5432/languagerecap`.
+
+Verify only metadata, never values:
+
+```bash
+stat -c '%A %U:%G %n' /opt/languagerecap/secrets/*
+```
+
+Expected permissions are `-rw-------`; the directory must be `drwx------` and owned by the deployment user that runs Docker Compose. The deployment will continue to fail closed if any file is missing or empty. If the current deployment reports missing files, provision them with the helper and rerun the deployment.
+
+The app reads secret values from `/run/secrets`. Secret values are not passed as ordinary Compose environment variables. Rotate a secret by running the helper again, recreating the affected service, and removing the old value from the host.
 
 ## Deployment and rollback
 

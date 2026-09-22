@@ -32,6 +32,7 @@ for required_secret in postgres_password database_url gemini_api_key auth_secret
   fi
 done
 if (( missing_file )); then
+  printf 'Provision secrets once with: %s\n' "$ROOT_DIR/provision-production-secrets.sh" >&2
   exit 1
 fi
 

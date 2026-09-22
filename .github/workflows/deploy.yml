@@ -166,7 +166,7 @@ jobs:
           ssh -i "$HOME/.ssh/deploy_key" "$DROPLET_USER@$DROPLET_HOST" \
             "install -d -m 700 '$remote_dir/migrations'"
           scp -i "$HOME/.ssh/deploy_key" \
-            deploy-production.sh docker-compose.production.yml Caddyfile \
+            deploy-production.sh docker-compose.production.yml Caddyfile scripts/provision-production-secrets.sh \
             "$DROPLET_USER@$DROPLET_HOST:$remote_dir/"
           scp -i "$HOME/.ssh/deploy_key" lib/schema.sql \
             "$DROPLET_USER@$DROPLET_HOST:$remote_dir/schema.sql"
@@ -176,6 +176,7 @@ jobs:
             "set -euo pipefail; \
              install -d -m 755 /opt/languagerecap/lib /opt/languagerecap/migrations; \
              install -m 755 '$remote_dir/deploy-production.sh' /opt/languagerecap/deploy-production.sh; \
+             install -m 700 '$remote_dir/provision-production-secrets.sh' /opt/languagerecap/provision-production-secrets.sh; \
              install -m 644 '$remote_dir/docker-compose.production.yml' /opt/languagerecap/docker-compose.production.yml; \
              install -m 644 '$remote_dir/Caddyfile' /opt/languagerecap/Caddyfile; \
              install -m 644 '$remote_dir/schema.sql' /opt/languagerecap/lib/schema.sql; \
