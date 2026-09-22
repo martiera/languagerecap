@@ -38,7 +38,7 @@ The deployment SSH key is manually rotated on a documented schedule: install the
 
 ## Droplet setup
 
-Install Docker Engine, the Docker Compose plugin, `curl`, `ca-certificates`, and Cosign. Create `/opt/languagerecap` and place these files there:
+Install Docker Engine, the Docker Compose plugin, `curl`, `ca-certificates`, and Cosign. Cosign must be installed before the first deployment because the deployment refuses to pull an image until its signature is verified. Create `/opt/languagerecap` and place these files there:
 
 - `docker-compose.production.yml`
 - `Caddyfile`
@@ -48,6 +48,40 @@ Install Docker Engine, the Docker Compose plugin, `curl`, `ca-certificates`, and
 - `.env`
 - `secrets/`
 - `provision-production-secrets.sh`
+
+### Install Cosign manually
+
+Run these commands over SSH as an administrator, using the architecture shown by `uname -m`. Pin the approved release, download the binary and its checksum file from the official Sigstore GitHub release, verify the checksum before installing, and then remove the download directory:
+
+```bash
+set -euo pipefail
+COSIGN_VERSION=v3.1.3
+case "$(uname -m)" in
+  x86_64) COSIGN_ARCH=amd64 ;;
+  aarch64|arm64) COSIGN_ARCH=arm64 ;;
+  *) printf 'Unsupported architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
+esac
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+curl --fail --silent --show-error --location \
+  --output "$tmp_dir/cosign-linux-$COSIGN_ARCH" \
+  "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-$COSIGN_ARCH"
+curl --fail --silent --show-error --location \
+  --output "$tmp_dir/cosign_checksums.txt" \
+  "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign_checksums.txt"
+(cd "$tmp_dir" && grep "cosign-linux-$COSIGN_ARCH$" cosign_checksums.txt | sha256sum -c -)
+install -m 0755 "$tmp_dir/cosign-linux-$COSIGN_ARCH" /usr/local/bin/cosign
+cosign version
+```
+
+The checksum command must pass before installation. If the release asset, checksum entry, or architecture does not match, stop and investigate instead of installing the binary. Confirm the deployment user can execute it:
+
+```bash
+command -v cosign
+cosign version
+```
+
+Do not replace this step with `curl | sh`, an unverified package, or a deployment script that skips signature verification.
 
 The deployment user should own `/opt/languagerecap`, use a dedicated account, and have only the Docker permissions required by the deployment model. Keep SSH password login disabled and verify the host key independently.
 

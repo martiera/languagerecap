@@ -47,7 +47,7 @@ compose=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
 printf 'Pulling %s...\n' "$APP_IMAGE"
 if ! command -v cosign >/dev/null 2>&1; then
-  printf 'cosign is required to verify production images.\n' >&2
+  printf 'cosign is required to verify production images. Install it on the Droplet; see docs/DEPLOYMENT.md.\n' >&2
   exit 1
 fi
 cosign verify \
