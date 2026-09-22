@@ -76,12 +76,12 @@ export async function requireUser(request: Request) {
 }
 
 export function setSessionCookie(response: NextResponse, token: string) {
-  const secure = process.env.NODE_ENV === 'production' && process.env.NEXT_PUBLIC_APP_URL?.startsWith('https://');
+  const secure = process.env.NODE_ENV === 'production';
   response.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', secure, maxAge: SESSION_DAYS * 86400, path: '/' });
 }
 
 export async function clearSession(request: Request, response: NextResponse) {
   const token = request.headers.get('cookie')?.match(/(?:^|; )languagerecap_session=([^;]+)/)?.[1];
   if (token) await pool.query('DELETE FROM app_sessions WHERE token_hash=$1', [hashToken(token)]);
-  response.cookies.set(SESSION_COOKIE, '', { httpOnly: true, expires: new Date(0), path: '/' });
+  response.cookies.set(SESSION_COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', expires: new Date(0), path: '/' });
 }

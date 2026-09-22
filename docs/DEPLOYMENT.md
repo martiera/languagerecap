@@ -2,58 +2,53 @@
 
 ## Architecture
 
-GitHub Actions builds the production image on a GitHub-hosted runner and publishes a private image to GHCR:
+GitHub Actions builds the production image on a GitHub-hosted runner and publishes a private, signed image to GHCR:
 
 ```text
-pull request -> build validation
-push to master -> build -> GHCR -> SSH -> Droplet pulls image -> migrations -> health check
+pull request -> reproducible build validation
+push to master -> build -> sign immutable digest -> SSH -> Droplet verifies -> migrations -> health check
 ```
 
-The Droplet does not run `docker compose build`. This keeps the memory-heavy Next.js build off a 1 GB server.
+Production traffic enters through Caddy:
+
+```text
+Internet :80/:443 -> Caddy (automatic HTTPS) -> private app network -> Next.js
+                                      private app network -> PostgreSQL
+```
+
+Only ports 80 and 443 are public. The app port and PostgreSQL are not published to the host. Caddy persists ACME certificate state in the `caddy_data` volume.
 
 ## GitHub configuration
 
-The workflow is `.github/workflows/deploy.yml`. It builds pull requests, publishes and deploys on pushes to `master`, and provides two manual deployment modes:
+The workflow is `.github/workflows/deploy.yml`. It builds pull requests, publishes and deploys on pushes to `master`, and provides two manual modes:
 
-- `build_and_deploy`: build and publish the selected commit, then deploy it.
-- `deploy_existing`: deploy an already-published SHA-tagged image without rebuilding it. The SHA must be reachable from `master`; leaving `image_sha` blank uses the selected workflow commit.
+- `build_and_deploy`: build, sign, publish, and deploy the selected commit.
+- `deploy_existing`: resolve and verify an already-published signed image digest without rebuilding.
 
-For a failed deployment after a successful build, run the workflow manually with `deploy_existing` and enter the SHA from the successful build. This reuses the immutable GHCR image.
+Required repository secrets:
 
-Add these repository secrets:
+- `DROPLET_HOST`
+- `DROPLET_USER`
+- `DROPLET_SSH_PRIVATE_KEY`
+- `DROPLET_KNOWN_HOSTS`
 
-- `DROPLET_HOST`: public hostname or IP.
-- `DROPLET_USER`: deployment SSH user.
-- `DROPLET_SSH_PRIVATE_KEY`: private key whose public key is installed for that user.
-- `DROPLET_KNOWN_HOSTS`: output for the Droplet from `ssh-keyscan -H <host>` after independently verifying the fingerprint.
+Images are deployed by immutable digest, signed with keyless Cosign using GitHub Actions OIDC, and accompanied by an SPDX SBOM artifact. The Droplet verifies the certificate identity and OIDC issuer before pulling an image. Rollback verifies the previous digest through the same policy.
 
-The workflow uses `GITHUB_TOKEN` with `packages: write` to publish to GHCR. The image remains private.
-
-The numbered migrations also seed a read-only demo account at
-`demo@languagerecap.local` with sample Italian vocabulary. The public **Try the
-demo** link creates a session for this account and opens the normal dashboard
-and review pages. Migrations also seed representative conjugations for all
-forms stages. Demo review answers are evaluated but never change the shared
-account's SRS state; lesson parsing and saving are blocked.
+The deployment SSH key is manually rotated on a documented schedule: install the new public key, update the GitHub secret, verify a deployment, then remove the old public key. Caddy separately maintains HTTPS certificates and renewal keys.
 
 ## Droplet setup
 
-Install Docker Engine, the Docker Compose plugin, `curl`, and `ca-certificates`. Create `/opt/languagerecap` and place these files there:
+Install Docker Engine, the Docker Compose plugin, `curl`, `ca-certificates`, and Cosign. Create `/opt/languagerecap` and place these files there:
 
 - `docker-compose.production.yml`
+- `Caddyfile`
 - `deploy-production.sh`
 - `lib/schema.sql`
 - `migrations/`
 - `.env`
+- `secrets/`
 
-The `.env` file must contain production-only values for PostgreSQL, `DATABASE_URL`, `AUTH_SECRET`, `GEMINI_API_KEY`, `NEXT_PUBLIC_APP_URL`, and optional model names. Never commit it.
-
-The deployment user needs permission to run Docker and must own `/opt/languagerecap`, because GitHub Actions installs the deployment files there without an interactive `sudo` password:
-
-```bash
-mkdir -p /opt/languagerecap
-chown -R deploy:deploy /opt/languagerecap
-```
+The deployment user should own `/opt/languagerecap`, use a dedicated account, and have only the Docker permissions required by the deployment model. Keep SSH password login disabled and verify the host key independently.
 
 The server must already be authenticated to private GHCR with a read-only deploy token:
 
@@ -61,43 +56,66 @@ The server must already be authenticated to private GHCR with a read-only deploy
 echo "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 ```
 
-Create the initial `/opt/languagerecap` directory and `.env`, and ensure the database volume is persistent. Each `master` deployment transfers the production Compose file, schema, migrations, and deployment script automatically. PostgreSQL should not be publicly exposed; allow only SSH, HTTP, and HTTPS through the firewall.
+Configure DNS before the first deployment:
 
-Example `.env` structure (replace every placeholder with a real value):
+- `PUBLIC_HOSTNAME` must resolve to the Droplet.
+- `ACME_EMAIL` must be a monitored address.
+- The firewall should allow only SSH, HTTP, and HTTPS.
+
+## Non-secret `.env`
+
+Create `/opt/languagerecap/.env` on the Droplet, not in the repository:
 
 ```dotenv
 POSTGRES_USER=languagerecap
-POSTGRES_PASSWORD=replace-with-a-long-random-password
 POSTGRES_DB=languagerecap
-DATABASE_URL=postgresql://languagerecap:YOUR_DB_PASSWORD@db:5432/languagerecap
-AUTH_SECRET=replace-with-at-least-32-random-bytes
-GEMINI_API_KEY=replace-with-your-gemini-key
+DATABASE_URL_FILE=/run/secrets/database_url
+AUTH_SECRET_FILE=/run/secrets/auth_secret
+GEMINI_API_KEY_FILE=/run/secrets/gemini_api_key
 GEMINI_MODEL=
 GEMINI_VERIFIER_MODEL=
 NEXT_PUBLIC_APP_URL=https://your-domain.example
-PORT=3000
+PUBLIC_HOSTNAME=your-domain.example
+ACME_EMAIL=admin@your-domain.example
+SECRETS_DIR=/opt/languagerecap/secrets
 ```
 
-The two Gemini model variables may remain empty; defining them explicitly avoids Compose warnings.
+Use mode 0600 for this file. `PUBLIC_HOSTNAME` and `ACME_EMAIL` are deployment-time values and must not be committed.
 
-Create it on the Droplet, not in the repository:
+## Docker secrets
+
+Create secret files on the Droplet, not in the repository:
 
 ```bash
-umask 077
-nano /opt/languagerecap/.env
-chown deploy:deploy /opt/languagerecap/.env
-chmod 600 /opt/languagerecap/.env
+install -d -m 700 /opt/languagerecap/secrets
+printf '%s' 'replace-with-a-long-random-postgres-password' > /opt/languagerecap/secrets/postgres_password
+printf '%s' 'postgresql://languagerecap:replace-with-a-long-random-postgres-password@db:5432/languagerecap' > /opt/languagerecap/secrets/database_url
+printf '%s' 'replace-with-at-least-32-random-bytes' > /opt/languagerecap/secrets/auth_secret
+printf '%s' 'replace-with-your-gemini-key' > /opt/languagerecap/secrets/gemini_api_key
+chmod 600 /opt/languagerecap/secrets/*
+chown -R deploy:deploy /opt/languagerecap/secrets
 ```
+
+The app reads secret values from `/run/secrets`. Secret values are not passed as ordinary Compose environment variables. Rotate a secret by replacing the file with mode 0600, recreating the affected service, and removing the old value from the host.
 
 ## Deployment and rollback
 
-The workflow transfers `deploy-production.sh` and invokes it with the immutable image reference. The script:
+The workflow transfers deployment artifacts to a unique mode-0700 staging directory and removes it after use. It does not use predictable shared `/tmp` paths or copy server secrets.
 
-1. Pulls the image.
-2. Starts PostgreSQL.
-3. Applies the base schema and numbered migrations idempotently.
-4. Recreates only the app container.
-5. Requests `NEXT_PUBLIC_APP_URL` with `curl`.
-6. Restores the previous image recorded in `.deployed-image` if the health check fails.
+`deploy-production.sh`:
+
+1. Requires an immutable `ghcr.io/...@sha256:...` reference.
+2. Verifies the Cosign certificate identity and OIDC issuer.
+3. Pulls the signed image.
+4. Starts PostgreSQL and applies the base schema plus numbered migrations idempotently.
+5. Recreates the app and Caddy services as needed.
+6. Checks the app locally from inside its container.
+7. Restores the previous signed digest recorded in `.deployed-image` if health checks fail.
 
 The database volume is not removed during deployment. Keep external backups because a single Droplet is not a backup strategy.
+
+## Runtime hardening
+
+The app runs as a non-root user with a read-only root filesystem, dropped Linux capabilities, and `no-new-privileges`. Caddy terminates TLS, redirects HTTP to HTTPS, and adds security headers. PostgreSQL remains on an internal Docker network.
+
+The Docker build uses the committed lockfile, `npm ci`, and pinned base-image digests. Keep dependency and base-image updates reviewable and run the deployment validation before rollout.

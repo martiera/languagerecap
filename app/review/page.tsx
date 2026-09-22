@@ -65,17 +65,19 @@ export default function Review() {
   }, [sourceLanguage, targetLanguage, ready]);
 
   useEffect(() => {
-    speechSynthesis.cancel();
+    if (typeof window === 'undefined') return;
+    const synthesis = window.speechSynthesis;
+    synthesis.cancel();
     if (!word || muted) return;
     const locale = languages.find(item => item.code === targetLanguage)?.locale || 'it-IT';
     const speak = () => {
       const utterance = new SpeechSynthesisUtterance(word.targetText);
       utterance.lang = locale;
-      speechSynthesis.speak(utterance);
+      synthesis.speak(utterance);
     };
-    if (speechSynthesis.getVoices().length) speak();
-    else speechSynthesis.onvoiceschanged = speak;
-    return () => { speechSynthesis.cancel(); speechSynthesis.onvoiceschanged = null; };
+    if (synthesis.getVoices().length) speak();
+    else synthesis.onvoiceschanged = speak;
+    return () => { synthesis.cancel(); synthesis.onvoiceschanged = null; };
   }, [word, targetLanguage, muted]);
 
   async function selectPair(value: string) {
@@ -92,7 +94,7 @@ export default function Review() {
     setMuted(value => {
       const next = !value;
       localStorage.setItem('languagerecap-review-muted', String(next));
-      if (next) speechSynthesis.cancel();
+      if (next && typeof window !== 'undefined') window.speechSynthesis.cancel();
       return next;
     });
   }

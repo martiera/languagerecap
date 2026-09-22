@@ -1,15 +1,19 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./lib/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
       - ./migrations:/migrations:ro
+    secrets:
+      - postgres_password
+    networks:
+      - private
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -19,19 +23,72 @@ services:
   app:
     image: ${APP_IMAGE:?APP_IMAGE must be set}
     restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
+    expose:
+      - "3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      DATABASE_URL_FILE: /run/secrets/database_url
+      GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      AUTH_SECRET_FILE: /run/secrets/auth_secret
       GEMINI_MODEL: ${GEMINI_MODEL}
       GEMINI_VERIFIER_MODEL: ${GEMINI_VERIFIER_MODEL}
-      AUTH_SECRET: ${AUTH_SECRET}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
     depends_on:
       db:
         condition: service_healthy
+    secrets:
+      - database_url
+      - gemini_api_key
+      - auth_secret
+    networks:
+      - private
+
+  caddy:
+    image: caddy@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?PUBLIC_HOSTNAME must be set}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      app:
+        condition: service_started
+    networks:
+      - public
+      - private
+
+secrets:
+  postgres_password:
+    file: ${SECRETS_DIR:-./secrets}/postgres_password
+  database_url:
+    file: ${SECRETS_DIR:-./secrets}/database_url
+  gemini_api_key:
+    file: ${SECRETS_DIR:-./secrets}/gemini_api_key
+  auth_secret:
+    file: ${SECRETS_DIR:-./secrets}/auth_secret
+
+networks:
+  public:
+  private:
+    internal: true
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

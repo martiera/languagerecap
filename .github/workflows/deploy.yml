@@ -27,6 +27,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
@@ -37,6 +38,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -90,6 +92,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build image
+        id: build-image
         if: github.event_name != 'workflow_dispatch' || inputs.deployment_mode == 'build_and_deploy'
         uses: docker/build-push-action@v6
         with:
@@ -100,6 +103,49 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Install Cosign
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Resolve and sign trusted image
+        id: trusted-image
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_SHA_INPUT: ${{ inputs.image_sha }}
+          BUILT_DIGEST: ${{ steps.build-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.deployment_mode }}" == "deploy_existing" ]]; then
+            image_sha="${IMAGE_SHA_INPUT:-$GITHUB_SHA}"
+            digest="$(docker buildx imagetools inspect "$IMAGE_NAME:$image_sha" | awk '/Digest:/ {print $2; exit}')"
+          else
+            digest="$BUILT_DIGEST"
+          fi
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            printf 'Could not resolve an immutable image digest.\n' >&2
+            exit 1
+          fi
+          image_reference="$IMAGE_NAME@$digest"
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" || "${{ inputs.deployment_mode }}" == "build_and_deploy" ]]; then
+            cosign sign --yes "$image_reference"
+          else
+            cosign verify \
+              --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/deploy.yml@refs/heads/master" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$image_reference" >/dev/null
+          fi
+          printf 'image_reference=%s\n' "$image_reference" >> "$GITHUB_OUTPUT"
+
+      - name: Generate image SBOM
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.trusted-image.outputs.image_reference }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: true
+
       - name: Deploy to Droplet
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
@@ -107,24 +153,33 @@ jobs:
           DROPLET_USER: ${{ secrets.DROPLET_USER }}
           DROPLET_SSH_PRIVATE_KEY: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }}
           DROPLET_KNOWN_HOSTS: ${{ secrets.DROPLET_KNOWN_HOSTS }}
-          IMAGE_REFERENCE: ${{ steps.image.outputs.image_reference }}
+          IMAGE_REFERENCE: ${{ steps.trusted-image.outputs.image_reference }}
         run: |
+          set -euo pipefail
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$DROPLET_SSH_PRIVATE_KEY" > "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/deploy_key"
           printf '%s\n' "$DROPLET_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 644 "$HOME/.ssh/known_hosts"
+          remote_dir="$(ssh -i "$HOME/.ssh/deploy_key" "$DROPLET_USER@$DROPLET_HOST" \
+            "umask 077; mktemp -d /tmp/languagerecap-deploy.XXXXXX")"
           ssh -i "$HOME/.ssh/deploy_key" "$DROPLET_USER@$DROPLET_HOST" \
-            "mkdir -p /tmp/languagerecap-migrations"
+            "install -d -m 700 '$remote_dir/migrations'"
           scp -i "$HOME/.ssh/deploy_key" \
-            deploy-production.sh docker-compose.production.yml lib/schema.sql \
-            "$DROPLET_USER@$DROPLET_HOST:/tmp/"
+            deploy-production.sh docker-compose.production.yml Caddyfile \
+            "$DROPLET_USER@$DROPLET_HOST:$remote_dir/"
+          scp -i "$HOME/.ssh/deploy_key" lib/schema.sql \
+            "$DROPLET_USER@$DROPLET_HOST:$remote_dir/schema.sql"
           scp -i "$HOME/.ssh/deploy_key" -r migrations/. \
-            "$DROPLET_USER@$DROPLET_HOST:/tmp/languagerecap-migrations/"
+            "$DROPLET_USER@$DROPLET_HOST:$remote_dir/migrations/"
           ssh -i "$HOME/.ssh/deploy_key" "$DROPLET_USER@$DROPLET_HOST" \
-            "install -d -m 755 /opt/languagerecap/lib /opt/languagerecap/migrations && \
-             install -m 755 /tmp/deploy-production.sh /opt/languagerecap/deploy-production.sh && \
-             install -m 644 /tmp/docker-compose.production.yml /opt/languagerecap/docker-compose.production.yml && \
-             install -m 644 /tmp/schema.sql /opt/languagerecap/lib/schema.sql && \
-             cp -a /tmp/languagerecap-migrations/. /opt/languagerecap/migrations/ && \
-             /opt/languagerecap/deploy-production.sh '$IMAGE_REFERENCE'"
+            "set -euo pipefail; \
+             install -d -m 755 /opt/languagerecap/lib /opt/languagerecap/migrations; \
+             install -m 755 '$remote_dir/deploy-production.sh' /opt/languagerecap/deploy-production.sh; \
+             install -m 644 '$remote_dir/docker-compose.production.yml' /opt/languagerecap/docker-compose.production.yml; \
+             install -m 644 '$remote_dir/Caddyfile' /opt/languagerecap/Caddyfile; \
+             install -m 644 '$remote_dir/schema.sql' /opt/languagerecap/lib/schema.sql; \
+             rm -rf /opt/languagerecap/migrations/*; \
+             cp -a '$remote_dir/migrations/.' /opt/languagerecap/migrations/; \
+             /opt/languagerecap/deploy-production.sh '$IMAGE_REFERENCE'; \
+             rm -rf '$remote_dir'"

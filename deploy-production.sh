@@ -6,15 +6,28 @@ COMPOSE_FILE="${COMPOSE_FILE:-$ROOT_DIR/docker-compose.production.yml}"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 STATE_FILE="${STATE_FILE:-$ROOT_DIR/.deployed-image}"
 APP_IMAGE="${1:-}"
+COSIGN_CERTIFICATE_IDENTITY="${COSIGN_CERTIFICATE_IDENTITY:-https://github.com/martiera/languagerecap/.github/workflows/deploy.yml@refs/heads/master}"
+COSIGN_OIDC_ISSUER="${COSIGN_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
 if [[ -z "$APP_IMAGE" ]]; then
   printf 'Usage: %s <image-reference>\n' "$0" >&2
+  exit 64
+fi
+if [[ ! "$APP_IMAGE" =~ ^ghcr\.io/[^@]+@sha256:[0-9a-f]{64}$ ]]; then
+  printf 'Production image must be an immutable GHCR digest reference.\n' >&2
   exit 64
 fi
 missing_file=0
 for required_file in "$COMPOSE_FILE" "$ENV_FILE"; do
   if [[ ! -f "$required_file" ]]; then
     printf 'Missing required deployment file: %s\n' "$required_file" >&2
+    missing_file=1
+  fi
+done
+for required_secret in postgres_password database_url gemini_api_key auth_secret; do
+  secret_path="${SECRETS_DIR:-$ROOT_DIR/secrets}/$required_secret"
+  if [[ ! -f "$secret_path" || ! -s "$secret_path" ]]; then
+    printf 'Missing required secret file: %s\n' "$secret_path" >&2
     missing_file=1
   fi
 done
@@ -32,6 +45,14 @@ fi
 compose=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
 printf 'Pulling %s...\n' "$APP_IMAGE"
+if ! command -v cosign >/dev/null 2>&1; then
+  printf 'cosign is required to verify production images.\n' >&2
+  exit 1
+fi
+cosign verify \
+  --certificate-identity "$COSIGN_CERTIFICATE_IDENTITY" \
+  --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+  "$APP_IMAGE" >/dev/null
 "${compose[@]}" pull app
 printf '%s\n' 'Starting PostgreSQL...'
 "${compose[@]}" up -d db
@@ -67,15 +88,17 @@ for migration in "$ROOT_DIR"/migrations/[0-9][0-9][0-9]_*.sql; do
 done
 
 printf 'Starting app image %s...\n' "$APP_IMAGE"
-"${compose[@]}" up -d --no-build --force-recreate app
-
-app_url="${NEXT_PUBLIC_APP_URL:-http://localhost:${PORT:-3000}}"
-if ! curl --fail --silent --show-error --location --retry 15 --retry-delay 2 --retry-connrefused --retry-all-errors "$app_url" >/dev/null; then
+"${compose[@]}" up -d --no-build --force-recreate app caddy
+if ! "${compose[@]}" exec -T app node -e "fetch('http://127.0.0.1:3000/').then(response => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))"; then
   printf 'Health check failed for %s.\n' "$APP_IMAGE" >&2
   if [[ -n "$previous_image" && "$previous_image" != "$APP_IMAGE" ]]; then
     printf 'Rolling back to %s...\n' "$previous_image" >&2
+    cosign verify \
+      --certificate-identity "$COSIGN_CERTIFICATE_IDENTITY" \
+      --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+      "$previous_image" >/dev/null
     export APP_IMAGE="$previous_image"
-    "${compose[@]}" up -d --no-build --force-recreate app
+    "${compose[@]}" up -d --no-build --force-recreate app caddy
   fi
   exit 1
 fi
