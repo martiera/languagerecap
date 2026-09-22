@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createDemoSession, setSessionCookie } from '@/lib/auth';
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const demo = await createDemoSession();
     const response = NextResponse.json({ user: { email: demo.user.email, demo: true } });
-    setSessionCookie(response, demo.token);
+    setSessionCookie(response, demo.token, request);
     return response;
   } catch (error) {
     console.error(error);

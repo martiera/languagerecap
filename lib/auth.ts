@@ -75,13 +75,19 @@ export async function requireUser(request: Request) {
   return user;
 }
 
-export function setSessionCookie(response: NextResponse, token: string) {
-  const secure = process.env.NODE_ENV === 'production';
+function shouldUseSecureCookie(request: Request) {
+  const forwardedProtocol = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  const protocol = forwardedProtocol || new URL(request.url).protocol.replace(':', '');
+  return process.env.NODE_ENV === 'production' && protocol === 'https';
+}
+
+export function setSessionCookie(response: NextResponse, token: string, request: Request) {
+  const secure = shouldUseSecureCookie(request);
   response.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', secure, maxAge: SESSION_DAYS * 86400, path: '/' });
 }
 
 export async function clearSession(request: Request, response: NextResponse) {
   const token = request.headers.get('cookie')?.match(/(?:^|; )languagerecap_session=([^;]+)/)?.[1];
   if (token) await pool.query('DELETE FROM app_sessions WHERE token_hash=$1', [hashToken(token)]);
-  response.cookies.set(SESSION_COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', expires: new Date(0), path: '/' });
+  response.cookies.set(SESSION_COOKIE, '', { httpOnly: true, sameSite: 'lax', secure: shouldUseSecureCookie(request), expires: new Date(0), path: '/' });
 }

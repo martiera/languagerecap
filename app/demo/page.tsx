@@ -9,14 +9,20 @@ export default function DemoPage() {
 
   useEffect(() => {
     let active = true;
-    fetch('/api/auth/demo', { method: 'POST' })
+    fetch('/api/auth/demo', { method: 'POST', credentials: 'include', cache: 'no-store' })
       .then(async response => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'The demo is temporarily unavailable.');
       })
+      .then(async () => {
+        const response = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok || !data.user?.demo) throw new Error('The demo session could not be started.');
+      })
       .then(() => {
+        if (!active) return;
+        localStorage.setItem('languagerecap-source-language', 'en');
         localStorage.setItem('languagerecap-learning-language', 'it');
-        localStorage.setItem('languagerecap-native-language', 'en');
         router.replace('/learn');
       })
       .catch(reason => {
