@@ -106,8 +106,20 @@ done
 
 printf 'Starting app image %s...\n' "$APP_IMAGE"
 "${compose[@]}" up -d --no-build --force-recreate app caddy
-if ! "${compose[@]}" exec -T app node -e "fetch('http://127.0.0.1:3000/').then(response => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))"; then
+app_ready=0
+for attempt in {1..30}; do
+  if "${compose[@]}" exec -T app node -e "fetch('http://127.0.0.1:3000/').then(response => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))" >/dev/null 2>&1; then
+    app_ready=1
+    break
+  fi
+  sleep 2
+done
+if (( ! app_ready )); then
   printf 'Health check failed for %s.\n' "$APP_IMAGE" >&2
+  printf '%s\n' 'Recent app logs:' >&2
+  "${compose[@]}" logs --tail 100 app >&2 || true
+  printf '%s\n' 'Recent Caddy logs:' >&2
+  "${compose[@]}" logs --tail 100 caddy >&2 || true
   if [[ -n "$previous_image" && "$previous_image" != "$APP_IMAGE" ]]; then
     printf 'Rolling back to %s...\n' "$previous_image" >&2
     if cosign verify \
