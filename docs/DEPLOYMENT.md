@@ -154,7 +154,7 @@ The workflow transfers deployment artifacts to a unique mode-0700 staging direct
 4. Starts PostgreSQL and applies the base schema plus numbered migrations idempotently.
 5. Recreates the app and Caddy services as needed.
 6. Checks the app locally from inside its container.
-7. Restores the previous signed digest recorded in `.deployed-image` if health checks fail.
+7. Restores the previous signed digest recorded in `.deployed-image` if health checks fail. Legacy tags or unsigned rollback references are ignored and never deployed; manual recovery is required when no verified immutable rollback digest is available.
 
 The database volume is not removed during deployment. Keep external backups because a single Droplet is not a backup strategy.
 

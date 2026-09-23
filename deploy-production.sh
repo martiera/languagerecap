@@ -53,6 +53,10 @@ export APP_IMAGE
 previous_image=""
 if [[ -f "$STATE_FILE" ]]; then
   previous_image="$(tr -d '\r\n' < "$STATE_FILE")"
+  if [[ -n "$previous_image" && ! "$previous_image" =~ ^ghcr\.io/[^@]+@sha256:[0-9a-f]{64}$ ]]; then
+    printf 'Ignoring legacy or mutable rollback reference in %s: %s\n' "$STATE_FILE" "$previous_image" >&2
+    previous_image=""
+  fi
 fi
 
 compose=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
@@ -106,12 +110,17 @@ if ! "${compose[@]}" exec -T app node -e "fetch('http://127.0.0.1:3000/').then(r
   printf 'Health check failed for %s.\n' "$APP_IMAGE" >&2
   if [[ -n "$previous_image" && "$previous_image" != "$APP_IMAGE" ]]; then
     printf 'Rolling back to %s...\n' "$previous_image" >&2
-    cosign verify \
-      --certificate-identity "$COSIGN_CERTIFICATE_IDENTITY" \
-      --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
-      "$previous_image" >/dev/null
-    export APP_IMAGE="$previous_image"
-    "${compose[@]}" up -d --no-build --force-recreate app caddy
+    if cosign verify \
+        --certificate-identity "$COSIGN_CERTIFICATE_IDENTITY" \
+        --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER" \
+        "$previous_image" >/dev/null; then
+      export APP_IMAGE="$previous_image"
+      "${compose[@]}" up -d --no-build --force-recreate app caddy
+    else
+      printf 'Rollback image verification failed; leaving the failed deployment in place for manual recovery.\n' >&2
+    fi
+  else
+    printf 'No verified immutable rollback image is available; manual recovery is required.\n' >&2
   fi
   exit 1
 fi
