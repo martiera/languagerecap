@@ -9,7 +9,7 @@ export type LanguageCapability = {
 };
 
 export const languages: LanguageCapability[] = [
-  { code: 'en', name: 'English', flag: '🇬🇧', locale: 'en-US', vocabularyReview: true, conjugationReview: false, generatedPresent: false },
+  { code: 'en', name: 'English', flag: '🇬🇧', locale: 'en-US', vocabularyReview: true, conjugationReview: true, generatedPresent: false },
   { code: 'it', name: 'Italian', flag: '🇮🇹', locale: 'it-IT', vocabularyReview: true, conjugationReview: true, generatedPresent: true },
   { code: 'es', name: 'Spanish', flag: '🇪🇸', locale: 'es-ES', vocabularyReview: true, conjugationReview: false, generatedPresent: false },
   { code: 'fr', name: 'French', flag: '🇫🇷', locale: 'fr-FR', vocabularyReview: true, conjugationReview: false, generatedPresent: false },

@@ -61,7 +61,7 @@ export async function POST(request: Request) {
          ON CONFLICT (lesson_id, lexeme_id) DO UPDATE SET sense_id=COALESCE(lesson_lexemes.sense_id, EXCLUDED.sense_id)`,
         [lesson.rows[0].id, lexemeId, senseId],
       );
-      const conjugationRows = irregular && Array.isArray(word.conjugations) ? word.conjugations : [];
+      const conjugationRows = type !== 'phrase' && Array.isArray(word.conjugations) && (targetLanguage === 'en' || irregular) ? word.conjugations : [];
       for (const conjugation of conjugationRows) {
         if (!conjugation || typeof conjugation.tense !== 'string' || typeof conjugation.person !== 'string' || typeof conjugation.form !== 'string') continue;
         const conjugationResult = await client.query(
