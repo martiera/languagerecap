@@ -109,16 +109,16 @@ AUTH_SECRET_FILE=/run/secrets/auth_secret
 GEMINI_API_KEY_FILE=/run/secrets/gemini_api_key
 GEMINI_MODEL=
 GEMINI_VERIFIER_MODEL=
-NEXT_PUBLIC_APP_URL=https://your-domain.example
-PUBLIC_HOSTNAME=your-domain.example
-ACME_EMAIL=admin@your-domain.example
+NEXT_PUBLIC_APP_URL=https://languagerecap.com
+PUBLIC_HOSTNAME=languagerecap.com
+ACME_EMAIL=admin@languagerecap.com
 SECRETS_DIR=/opt/languagerecap/secrets
 ```
 
 Use mode 0600 for this file. Replace both placeholders before deploying:
 
-- `PUBLIC_HOSTNAME` must be the DNS name that points to this Droplet, for example `recap.example.com`.
-- `ACME_EMAIL` must be a monitored email address used by Let’s Encrypt for certificate notices.
+- `PUBLIC_HOSTNAME` must be `languagerecap.com`, or another DNS name that points to this Droplet.
+- `ACME_EMAIL` must be a monitored email address used by Let’s Encrypt for certificate notices. The example above is valid only if that mailbox exists.
 
 Do not use `localhost`, an internal hostname, or an IP address for `PUBLIC_HOSTNAME` when automatic HTTPS is enabled. These values are deployment-time configuration and must not be committed. The deployment preflight checks them before Cosign verification and reports the exact missing setting.
 
