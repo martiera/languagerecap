@@ -153,7 +153,7 @@ The workflow transfers deployment artifacts to a unique mode-0700 staging direct
 3. Pulls the signed image.
 4. Starts PostgreSQL and applies the base schema plus numbered migrations idempotently.
 5. Recreates the app and Caddy services as needed.
-6. Waits up to 60 seconds for the app to respond locally from inside its container; failed checks print recent app and Caddy logs.
+6. Waits up to 60 seconds for the app to respond on its container hostname from inside the container; failed checks print recent app and Caddy logs.
 7. Restores the previous signed digest recorded in `.deployed-image` if health checks fail. Legacy tags or unsigned rollback references are ignored and never deployed; manual recovery is required when no verified immutable rollback digest is available.
 
 The database volume is not removed during deployment. Keep external backups because a single Droplet is not a backup strategy.

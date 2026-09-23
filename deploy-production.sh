@@ -108,7 +108,7 @@ printf 'Starting app image %s...\n' "$APP_IMAGE"
 "${compose[@]}" up -d --no-build --force-recreate app caddy
 app_ready=0
 for attempt in {1..30}; do
-  if "${compose[@]}" exec -T app node -e "fetch('http://127.0.0.1:3000/', { redirect: 'manual' }).then(response => { console.error('app health status:', response.status); if (response.status < 200 || response.status >= 400) process.exit(1) }).catch(error => { console.error('app health error:', error.message); process.exit(1) })"; then
+  if "${compose[@]}" exec -T app node -e "const os=require('node:os'); const url='http://'+os.hostname()+':3000/'; fetch(url, { redirect: 'manual' }).then(response => { console.error('app health status:', response.status); if (response.status < 200 || response.status >= 400) process.exit(1) }).catch(error => { console.error('app health error:', error.message); process.exit(1) })"; then
     app_ready=1
     break
   fi
