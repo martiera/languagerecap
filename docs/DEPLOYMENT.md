@@ -115,7 +115,12 @@ ACME_EMAIL=admin@your-domain.example
 SECRETS_DIR=/opt/languagerecap/secrets
 ```
 
-Use mode 0600 for this file. `PUBLIC_HOSTNAME` and `ACME_EMAIL` are deployment-time values and must not be committed.
+Use mode 0600 for this file. Replace both placeholders before deploying:
+
+- `PUBLIC_HOSTNAME` must be the DNS name that points to this Droplet, for example `recap.example.com`.
+- `ACME_EMAIL` must be a monitored email address used by Let’s Encrypt for certificate notices.
+
+Do not use `localhost`, an internal hostname, or an IP address for `PUBLIC_HOSTNAME` when automatic HTTPS is enabled. These values are deployment-time configuration and must not be committed. The deployment preflight checks them before Cosign verification and reports the exact missing setting.
 
 ## Docker secrets
 

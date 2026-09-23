@@ -36,6 +36,18 @@ if (( missing_file )); then
   exit 1
 fi
 
+missing_config=0
+for required_config in PUBLIC_HOSTNAME ACME_EMAIL; do
+  if ! grep -Eq "^${required_config}=[^[:space:]#].*$" "$ENV_FILE"; then
+    printf 'Missing required production setting in %s: %s\n' "$ENV_FILE" "$required_config" >&2
+    missing_config=1
+  fi
+done
+if (( missing_config )); then
+  printf 'Set PUBLIC_HOSTNAME to the DNS name for this Droplet and ACME_EMAIL to a monitored address.\n' >&2
+  exit 1
+fi
+
 cd "$ROOT_DIR"
 export APP_IMAGE
 previous_image=""
