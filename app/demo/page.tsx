@@ -3,20 +3,38 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+async function readJsonResponse(response: Response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    throw new Error(`Demo request failed (HTTP ${response.status}). The server returned an unexpected response.`);
+  }
+
+  try {
+    return await response.json() as { error?: string; user?: { demo?: boolean } };
+  } catch {
+    throw new Error(`Demo request failed (HTTP ${response.status}). The server returned invalid JSON.`);
+  }
+}
+
 export default function DemoPage() {
   const router = useRouter();
   const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
-    fetch('/api/auth/demo', { method: 'POST', credentials: 'include', cache: 'no-store' })
+    fetch('/api/auth/demo', {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+      cache: 'no-store',
+    })
       .then(async response => {
-        const data = await response.json();
+        const data = await readJsonResponse(response);
         if (!response.ok) throw new Error(data.error || 'The demo is temporarily unavailable.');
       })
       .then(async () => {
         const response = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' });
-        const data = await response.json();
+        const data = await readJsonResponse(response);
         if (!response.ok || !data.user?.demo) throw new Error('The demo session could not be started.');
       })
       .then(() => {
