@@ -14,6 +14,7 @@ Production traffic enters through Caddy:
 ```text
 Internet :80/:443 -> Caddy (automatic HTTPS) -> private app network -> Next.js
                                       private app network -> PostgreSQL
+                                      app egress network -> Gemini API
 ```
 
 Only ports 80 and 443 are public. The app port and PostgreSQL are not published to the host. Caddy persists ACME certificate state in the `caddy_data` volume.
@@ -160,6 +161,6 @@ The database volume is not removed during deployment. Keep external backups beca
 
 ## Runtime hardening
 
-The app runs as a non-root user with a read-only root filesystem, dropped Linux capabilities, and `no-new-privileges`. Caddy terminates TLS, redirects HTTP to HTTPS, and adds security headers. PostgreSQL remains on an internal Docker network.
+The app runs as a non-root user with a read-only root filesystem, dropped Linux capabilities, and `no-new-privileges`. Caddy terminates TLS, redirects HTTP to HTTPS, and adds security headers. PostgreSQL remains on an internal Docker network. The app also has a separate egress-only Docker network because Gemini parsing requires outbound HTTPS; the database remains isolated from that route.
 
 The Docker build uses the committed lockfile, `npm ci`, and pinned base-image digests. Keep dependency and base-image updates reviewable and run the deployment validation before rollout.
