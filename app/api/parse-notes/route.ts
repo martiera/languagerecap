@@ -8,6 +8,16 @@ import { getRuntimeConfig } from '@/lib/runtime-config';
 type GeminiResult = { vocabulary: { targetText: string; translation: string; type: string; isIrregular?: boolean; conjugations?: { tense: string; person: string; form: string; translation: string }[] }[]; shortStory: string; quizzes: { sentence: string; options: string[]; answer: string }[] };
 type GeminiResponse = { candidates?: { content?: { parts?: { text?: string }[] } }[] };
 type VerificationResult = { approved: boolean; issues: string[] };
+class GeminiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number | undefined,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = 'GeminiRequestError';
+  }
+}
 const MAX_NOTES_LENGTH = 50_000;
 const MAX_REQUEST_BYTES = 200_000;
 const MAX_VOCABULARY_ITEMS = 500;
@@ -51,19 +61,31 @@ async function callGemini(model: string, apiKey: string, body: Record<string, un
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      },
-    );
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gemini request failed.';
+      throw new GeminiRequestError(message, undefined, true);
+    }
     const data = await response.json().catch(() => ({})) as GeminiResponse & { error?: { message?: string } };
-    if (!response.ok) throw new Error(data.error?.message || `Gemini request failed with status ${response.status}.`);
+    if (!response.ok) {
+      const message = data.error?.message || `Gemini request failed with status ${response.status}.`;
+      const retryable = response.status === 429
+        || response.status >= 500
+        || /high demand|overloaded|temporarily unavailable|try again later/i.test(message);
+      throw new GeminiRequestError(message, response.status, retryable);
+    }
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('Gemini returned no content.');
+    if (!text) throw new GeminiRequestError('Gemini returned no content.', response.status, false);
     return text;
   } finally {
     clearTimeout(timeout);
@@ -146,18 +168,31 @@ export async function POST(request: Request) {
       contents: [{ parts: [{ text: `${task}\n\n<lesson_notes>\n${notes}\n</lesson_notes>` }] }],
       generationConfig: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: MAX_MODEL_OUTPUT_TOKENS },
     };
-    const models = [config.geminiModel || 'gemini-2.5-flash', 'gemini-3.6-flash'].filter((model, index, list) => list.indexOf(model) === index);
+    const models = [config.geminiModel || 'gemini-3.5-flash-lite', 'gemini-3.6-flash'].filter((model, index, list) => list.indexOf(model) === index);
     let text = '';
     let lastError = 'Gemini request failed';
-    for (const model of models) {
+    for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
+      const model = models[modelIndex];
       try {
         text = await callGemini(model, config.geminiApiKey, requestBody);
         break;
       } catch (error) {
         lastError = error instanceof Error ? error.message : lastError;
+        const failure = error instanceof GeminiRequestError
+          ? error
+          : new GeminiRequestError(lastError, undefined, false);
+        if (!failure.retryable || modelIndex >= models.length - 1) break;
+        console.warn('Gemini model unavailable; trying one alternate model.', {
+          model,
+          status: failure.status,
+          reason: failure.message,
+        });
       }
     }
-    if (!text) throw new Error(lastError);
+    if (!text) {
+      console.error('Gemini parsing failed for all configured models:', lastError);
+      return NextResponse.json({ error: 'The language model is temporarily unavailable. Please try again shortly.' }, { status: 503 });
+    }
     let parsed: unknown;
     try {
       parsed = parseJson(text);
