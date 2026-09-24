@@ -91,9 +91,13 @@ function fuzzInterval(interval: number, config: SrsConfig) {
 }
 
 function nextLongTermIndex(stability: number, config: SrsConfig, skip: number) {
-  const index = config.longTermIntervalsDays.findIndex(interval => interval > stability);
-  const firstFollowing = index === -1 ? config.longTermIntervalsDays.length - 1 : index;
-  return Math.min(firstFollowing + skip, config.longTermIntervalsDays.length - 1);
+  const currentRung = config.longTermIntervalsDays.findIndex(
+    interval => stability <= interval * (1 + config.fuzzRatio),
+  );
+  const currentIndex = currentRung === -1
+    ? config.longTermIntervalsDays.length - 1
+    : currentRung;
+  return Math.min(currentIndex + skip, config.longTermIntervalsDays.length - 1);
 }
 
 function ladderInterval(card: VocabularyCardState, config: SrsConfig, skip: number) {
@@ -101,7 +105,7 @@ function ladderInterval(card: VocabularyCardState, config: SrsConfig, skip: numb
   if (card.stability >= last) {
     return Math.min(config.maxIntervalDays, Math.max(last, card.stability * 2 ** skip));
   }
-  const index = nextLongTermIndex(card.stability, config, skip - 1);
+  const index = nextLongTermIndex(card.stability, config, skip);
   return config.longTermIntervalsDays[index];
 }
 

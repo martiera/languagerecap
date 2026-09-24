@@ -58,6 +58,12 @@ test('successful review follows the configured long-term ladder', () => {
   assert.equal(next.stability, 3);
 });
 
+test('fuzzed intervals still advance beyond the current ladder rung', () => {
+  const lowFuzz = { ...config, random: () => 0 };
+  const next = scheduleCard({ card: card({ state: 'review', stability: 34.4 }), grade: 'good', now, config: lowFuzz });
+  assert.equal(next.stability, 71.25);
+});
+
 test('fuzz stays within the configured bounds', () => {
   const low = scheduleCard({ card: card({ state: 'review', stability: 1 }), grade: 'good', now, config: { ...config, random: () => 0 } });
   const high = scheduleCard({ card: card({ state: 'review', stability: 1 }), grade: 'good', now, config: { ...config, random: () => 1 } });
