@@ -28,7 +28,21 @@ test('day keys follow the user time zone at UTC date boundaries', () => {
   assert.equal(localDayKey(new Date('2026-01-02T05:00:00.000Z'), 'America/New_York'), '2026-01-02');
 });
 
-test('lesson recap completes only when every word is learned', () => {
-  assert.equal(isLessonRecapComplete([{ srsState: 'review', srsStability: 21 }], 21), true);
-  assert.equal(isLessonRecapComplete([{ srsState: 'review', srsStability: 21 }, { srsState: 'learning', srsStability: 0 }], 21), false);
+test('lesson recap completes when every lesson word has graduated from learning', () => {
+  assert.equal(isLessonRecapComplete([{ srsState: 'review' }]), true);
+  assert.equal(isLessonRecapComplete([{ srsState: 'review' }, { srsState: 'learning' }]), false);
+  assert.equal(isLessonRecapComplete([{ srsState: 'review' }, { srsState: 'relearning' }]), false);
+});
+
+test('new words from a large lesson are spread by the daily new-card cap', () => {
+  const lessonWords = Array.from({ length: 5 }, (_, index) => ({
+    id: `lesson-${index}`,
+    srsState: 'new' as const,
+    srsDueAt: due,
+    srsDifficulty: 5,
+  }));
+  const cappedConfig = { ...config, maxNewCardsPerDay: 2 };
+  assert.equal(selectStudyQueue(lessonWords, { reviewsToday: 0, newToday: 0 }, cappedConfig).length, 2);
+  assert.equal(selectStudyQueue(lessonWords, { reviewsToday: 0, newToday: 2 }, cappedConfig).length, 0);
+  assert.equal(selectStudyQueue(lessonWords.slice(2), { reviewsToday: 0, newToday: 0 }, cappedConfig).length, 2);
 });
