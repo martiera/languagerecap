@@ -51,7 +51,38 @@ test('a review lapse returns to relearning and keeps a non-zero fraction of the 
   const lapsed = scheduleCard({ card: review, grade: 'again', now, config });
   assert.equal(lapsed.state, 'relearning');
   assert.equal(lapsed.stability, 14);
+  assert.equal(lapsed.baseInterval, 14);
   assert.equal(lapsed.lapses, 1);
+});
+
+test('ladder lapse ratio stays within its configured range', () => {
+  const lapsed = scheduleCard({
+    card: card({ state: 'review', stability: 35, baseInterval: 35 }),
+    grade: 'again',
+    now,
+    config: { ...config, lapseRatio: 0.2 },
+  });
+  assert.equal(lapsed.baseInterval, 10.5);
+});
+
+test('a ladder lapse graduates back at its reduced base before advancing above it', () => {
+  let current = scheduleCard({
+    card: card({ state: 'review', stability: 35, baseInterval: 35, due: now }),
+    grade: 'again',
+    now,
+    config,
+  });
+  assert.equal(current.baseInterval, 14);
+  current = scheduleCard({ card: current, grade: 'good', now: current.due, config });
+  current = scheduleCard({ card: current, grade: 'good', now: current.due, config });
+  current = scheduleCard({ card: current, grade: 'good', now: current.due, config });
+  assert.equal(current.state, 'review');
+  assert.equal(current.baseInterval, 14);
+  assert.equal(current.stability, 14);
+  const next = scheduleCard({ card: current, grade: 'good', now: current.due, config });
+  assert.equal(next.baseInterval, 35);
+  assert.ok(next.stability >= 35 * (1 - config.fuzzRatio));
+  assert.ok(next.stability <= 35 * (1 + config.fuzzRatio));
 });
 
 test('successful review follows the configured long-term ladder', () => {
