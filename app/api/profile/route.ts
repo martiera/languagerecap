@@ -63,10 +63,10 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: 'Typo tolerance must be between 0 and 2.' }, { status: 400 });
     }
     if (maxNewCardsPerDay !== undefined && (!Number.isInteger(maxNewCardsPerDay) || maxNewCardsPerDay < SRS_LIMITS.minNewCardsPerDay || maxNewCardsPerDay > SRS_LIMITS.maxNewCardsPerDay)) {
-      return NextResponse.json({ error: 'New cards per day must be between 5 and 30.' }, { status: 400 });
+      return NextResponse.json({ error: `New cards per day must be between ${SRS_LIMITS.minNewCardsPerDay} and ${SRS_LIMITS.maxNewCardsPerDay}.` }, { status: 400 });
     }
     if (maxReviewsPerDay !== undefined && (!Number.isInteger(maxReviewsPerDay) || maxReviewsPerDay < SRS_LIMITS.minReviewsPerDay || maxReviewsPerDay > SRS_LIMITS.maxReviewsPerDay)) {
-      return NextResponse.json({ error: 'Reviews per day must be between 1 and 1000.' }, { status: 400 });
+      return NextResponse.json({ error: `Reviews per day must be between ${SRS_LIMITS.minReviewsPerDay} and ${SRS_LIMITS.maxReviewsPerDay}.` }, { status: 400 });
     }
     await ensureProfile(user.id);
     const result = await pool.query(
