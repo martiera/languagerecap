@@ -18,6 +18,17 @@ CREATE TABLE IF NOT EXISTS app_sessions (
 CREATE INDEX IF NOT EXISTS app_sessions_user_idx ON app_sessions(user_id);
 CREATE INDEX IF NOT EXISTS app_sessions_expiry_idx ON app_sessions(expires_at);
 
+CREATE TABLE IF NOT EXISTS ai_request_limits (
+  scope_key TEXT NOT NULL,
+  window_start TIMESTAMPTZ NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (scope_key, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS ai_request_limits_updated_idx
+  ON ai_request_limits (updated_at);
+
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID UNIQUE REFERENCES app_users(id) ON DELETE CASCADE,
@@ -28,6 +39,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   srs_new_cards_per_day INTEGER NOT NULL DEFAULT 15,
   srs_max_reviews_per_day INTEGER NOT NULL DEFAULT 150
 );
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_user_id_idx ON profiles(user_id);
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS active_source_language_code TEXT NOT NULL DEFAULT 'en';
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS srs_new_cards_per_day INTEGER NOT NULL DEFAULT 15;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultSrsConfig } from './scheduler';
-import { isDailySessionComplete, isLessonRecapComplete, localDayKey, selectStudyQueue } from './queue';
+import { isDailySessionComplete, isLearnAheadCard, isLessonRecapComplete, localDayKey, selectStudyQueue } from './queue';
 
 const config = { ...defaultSrsConfig, random: () => 0.5 };
 const due = new Date('2026-01-01T12:00:00.000Z');
@@ -15,6 +15,19 @@ test('queue applies separate daily caps for new cards and reviews', () => {
   ];
   const selected = selectStudyQueue(cards, { reviewsToday: 149, newToday: 14 }, config);
   assert.deepEqual(selected.map(card => card.id), ['overdue-hard', 'new-one']);
+});
+
+test('learn-ahead only includes imminent learning cards and zero disables it', () => {
+  const now = new Date('2026-01-01T12:00:00.000Z');
+  const card = {
+    srsState: 'learning' as const,
+    srsDueAt: new Date('2026-01-01T12:10:00.000Z'),
+    srsDifficulty: 5,
+  };
+  assert.equal(isLearnAheadCard(card, now, { ...config, learnAheadMinutes: 20 }), true);
+  assert.equal(isLearnAheadCard(card, now, { ...config, learnAheadMinutes: 0 }), false);
+  assert.equal(isLearnAheadCard({ ...card, srsState: 'review' }, now, { ...config, learnAheadMinutes: 20 }), false);
+  assert.equal(isLearnAheadCard({ ...card, srsDueAt: new Date('2026-01-01T15:00:00.000Z') }, now, { ...config, learnAheadMinutes: 20 }), false);
 });
 
 test('session completion requires a correct retry for every failed card', () => {

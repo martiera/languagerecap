@@ -74,8 +74,6 @@ test('a ladder lapse graduates back at its reduced base before advancing above i
   });
   assert.equal(current.baseInterval, 14);
   current = scheduleCard({ card: current, grade: 'good', now: current.due, config });
-  current = scheduleCard({ card: current, grade: 'good', now: current.due, config });
-  current = scheduleCard({ card: current, grade: 'good', now: current.due, config });
   assert.equal(current.state, 'review');
   assert.equal(current.baseInterval, 14);
   assert.equal(current.stability, 14);
@@ -83,6 +81,20 @@ test('a ladder lapse graduates back at its reduced base before advancing above i
   assert.equal(next.baseInterval, 35);
   assert.ok(next.stability >= 35 * (1 - config.fuzzRatio));
   assert.ok(next.stability <= 35 * (1 + config.fuzzRatio));
+});
+
+test('relearning uses its separate ten-minute step', () => {
+  const lapsed = scheduleCard({
+    card: card({ state: 'review', stability: 35, baseInterval: 35, due: now }),
+    grade: 'again',
+    now,
+    config,
+  });
+  assert.equal(lapsed.state, 'relearning');
+  assert.equal(lapsed.due.getTime(), now.getTime());
+  const graduated = scheduleCard({ card: lapsed, grade: 'good', now: new Date(now.getTime() + 10 * 60_000), config });
+  assert.equal(graduated.state, 'review');
+  assert.equal(graduated.baseInterval, 14);
 });
 
 test('successful review follows the configured long-term ladder', () => {

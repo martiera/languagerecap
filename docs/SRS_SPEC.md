@@ -26,6 +26,11 @@ New cards use the configured learning steps, currently 0 minutes, 10 minutes,
 and 180 minutes. A successful review advances one step; a failure returns the
 card to step 1. Completing the final step graduates the card to review.
 
+Relearning is configured separately and defaults to one 10-minute step. A
+ladder lapse uses only the relearning steps before returning to review with its
+reduced base interval. FSRS receives the same setting as its
+`relearning_steps`.
+
 ## Long-term ladder
 
 The default base ladder is:
@@ -57,6 +62,12 @@ day. Configured limits are bounded by the shared SRS limits. New words from a
 large lesson are spread across days rather than bypassing the new-card cap.
 Reviews are ordered by overdue time and then difficulty. Skipped days do not
 create a backlog wall; the queue remains capped.
+
+When no card is currently due, learning and relearning cards due within the
+20-minute learn-ahead window may be shown. The window is configurable from
+0-60 minutes; zero disables learn-ahead. Review-state cards are never shown
+early. A review submitted within the window is timestamped at the actual
+submission time and scheduled from that time.
 
 Day boundaries use the user's validated IANA time zone. Timestamps are stored
 in UTC. Daily cap checks, dashboard calculations, and session accounting use
@@ -98,6 +109,8 @@ configured learn-ahead behavior.
 - Lesson membership reuses the existing `lesson_lexemes` relation.
 - Invalid saved time zones are rejected rather than silently converted to UTC.
 - Dashboard retention is measured from review logs, not estimated learning speed.
-- The next changes under consideration are bounded learn-ahead for learning and
-  relearning cards, a future-due empty-queue state, and separate relearning
-  steps instead of sharing new-card learning steps.
+- The study API reports the earliest remaining due time and the study UI
+  refetches automatically when that time arrives, displaying it in the user's
+  time zone when the queue is empty.
+- `lib/schema.sql` is a complete PostgreSQL snapshot, including objects from
+  migrations 002, 005, and 006; migration files remain the upgrade path.

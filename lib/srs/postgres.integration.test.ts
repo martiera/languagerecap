@@ -3,7 +3,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { pool } from '@/lib/db';
 import { createSession } from '@/lib/auth';
-import { POST } from '@/app/api/words/review/route';
+import { GET, POST } from '@/app/api/words/review/route';
 import { defaultSrsConfig, type VocabularyCardState } from './scheduler';
 import { scheduleVocabularyCard } from './schedule';
 
@@ -151,7 +151,7 @@ test('PostgreSQL daily-cap locking allows only one concurrent new-card review', 
   try {
     const cards = [first];
     for (let index = 0; index < 5; index += 1) cards.push(await addCardForUser(first.userId, first.cookie));
-    const results = await Promise.all(cards.map(card => review(card)));
+    const results = await Promise.all(cards.map(card => review(card, {})));
     assert.equal(results.filter(result => result.status === 200).length, 5);
     assert.equal(results.filter(result => result.status === 429).length, 1);
   } finally {
@@ -162,10 +162,64 @@ test('PostgreSQL daily-cap locking allows only one concurrent new-card review', 
 test('concurrent reviews of one card cannot bypass due scheduling', { skip: !enabled }, async () => {
   const concurrent = await seedCard();
   try {
-    const [one, two] = await Promise.all([review(concurrent), review(concurrent)]);
+    const [one, two] = await Promise.all([review(concurrent, {}), review(concurrent, {})]);
     assert.deepEqual([one.status, two.status].sort(), [200, 409]);
   } finally {
     await cleanup(concurrent.userId);
+  }
+});
+
+test('learning card due in ten minutes is returned and accepted by learn-ahead', { skip: !enabled }, async () => {
+  const seed = await seedCard();
+  try {
+    await pool.query(
+      `UPDATE user_lexemes
+       SET srs_state='learning', srs_learning_step=1,
+           srs_due_at=NOW() + INTERVAL '10 minutes',
+           next_review_at=NOW() + INTERVAL '10 minutes'
+       WHERE id=$1`,
+      [seed.cardId],
+    );
+    const queued = await GET(new Request('http://localhost/api/words/review?sourceLanguage=en&targetLanguage=de', {
+      headers: { cookie: seed.cookie },
+    }));
+    assert.equal(queued.status, 200);
+    const queuedBody = await queued.json();
+    assert.equal(queuedBody.words.some((word: { id: string }) => word.id === seed.cardId), true);
+
+    const response = await review(seed, {});
+    assert.equal(response.status, 200);
+    const log = await pool.query(
+      'SELECT reviewed_at FROM vocabulary_review_log WHERE card_id=$1 ORDER BY reviewed_at DESC LIMIT 1',
+      [seed.cardId],
+    );
+    assert.ok(new Date(log.rows[0].reviewed_at).getTime() >= Date.now() - 5_000);
+  } finally {
+    await cleanup(seed.userId);
+  }
+});
+
+test('learning card due in three hours is excluded and rejected', { skip: !enabled }, async () => {
+  const seed = await seedCard();
+  try {
+    await pool.query(
+      `UPDATE user_lexemes
+       SET srs_state='learning', srs_learning_step=1,
+           srs_due_at=NOW() + INTERVAL '3 hours',
+           next_review_at=NOW() + INTERVAL '3 hours'
+       WHERE id=$1`,
+      [seed.cardId],
+    );
+    const queued = await GET(new Request('http://localhost/api/words/review?sourceLanguage=en&targetLanguage=de', {
+      headers: { cookie: seed.cookie },
+    }));
+    assert.equal(queued.status, 200);
+    const queuedBody = await queued.json();
+    assert.equal(queuedBody.words.some((word: { id: string }) => word.id === seed.cardId), false);
+    const response = await review(seed, {});
+    assert.equal(response.status, 409);
+  } finally {
+    await cleanup(seed.userId);
   }
 });
 
@@ -189,7 +243,7 @@ test('manual override is rejected without the flag and logged as override with i
 test('recognition success unlocks production, then production unlocks cloze', { skip: !enabled }, async () => {
   const seed = await seedCard();
   try {
-    const recognition = await review(seed);
+    const recognition = await review(seed, {});
     assert.equal(recognition.status, 200);
     let row = await pool.query(
       'SELECT srs_card_type, srs_production_unlocked, srs_cloze_unlocked FROM user_lexemes WHERE id=$1',
@@ -204,7 +258,7 @@ test('recognition success unlocks production, then production unlocks cloze', { 
       'UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1',
       [seed.cardId],
     );
-    const production = await review(seed);
+    const production = await review(seed, {});
     assert.equal(production.status, 200);
     row = await pool.query(
       'SELECT srs_card_type FROM user_lexemes WHERE id=$1',

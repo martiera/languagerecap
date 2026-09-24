@@ -19,6 +19,7 @@ export type VocabularyCardState = {
 export type SrsConfig = {
   algorithm: SrsAlgorithm;
   learningStepsMinutes: readonly [number, number, number];
+  relearningStepsMinutes: readonly number[];
   longTermIntervalsDays: readonly number[];
   /** Applies to ladder lapses only; FSRS uses its native lapse scheduling. */
   lapseRatio: number;
@@ -39,6 +40,7 @@ export type SrsConfig = {
   easyResponseTimeMs: number;
   maxNewCardsPerDay: number;
   maxReviewsPerDay: number;
+  learnAheadMinutes: number;
   maxIntervalDays: number;
   random: () => number;
 };
@@ -46,6 +48,7 @@ export type SrsConfig = {
 export const defaultSrsConfig: SrsConfig = {
   algorithm: 'ladder',
   learningStepsMinutes: [0, 10, 180],
+  relearningStepsMinutes: [10],
   longTermIntervalsDays: [1, 3, 7, 16, 35, 75, 150],
   lapseRatio: 0.4,
   lapseMinRatio: 0.3,
@@ -65,6 +68,7 @@ export const defaultSrsConfig: SrsConfig = {
   easyResponseTimeMs: 3_000,
   maxNewCardsPerDay: SRS_LIMITS.defaultNewCardsPerDay,
   maxReviewsPerDay: SRS_LIMITS.defaultReviewsPerDay,
+  learnAheadMinutes: SRS_LIMITS.defaultLearnAheadMinutes,
   maxIntervalDays: 365,
   random: Math.random,
 };
@@ -178,15 +182,18 @@ export function scheduleCardWithMetadata({ card, grade, now, config }: ScheduleI
   }
 
   if (card.state !== 'review') {
-    if (grade === 'easy' || card.learningStep >= config.learningStepsMinutes.length - 1) {
+    const learningSteps = card.state === 'relearning'
+      ? config.relearningStepsMinutes
+      : config.learningStepsMinutes;
+    if (grade === 'easy' || card.learningStep >= learningSteps.length - 1) {
       return graduate(card, now, grade, config);
     }
     const nextStep = card.learningStep + 1;
-    const minutes = config.learningStepsMinutes[nextStep];
+    const minutes = learningSteps[nextStep];
     return { card: {
       ...card,
       difficulty: nextDifficulty(card, grade, config),
-      state: 'learning',
+      state: card.state === 'relearning' ? 'relearning' : 'learning',
       due: addMinutes(now, minutes),
       lastReview: now,
       reps: card.reps + 1,

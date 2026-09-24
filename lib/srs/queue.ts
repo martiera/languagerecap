@@ -11,6 +11,17 @@ export type DailyQueueUsage = {
   newToday: number;
 };
 
+export function isLearnAheadCard(
+  card: QueueCard,
+  now: Date,
+  config: SrsConfig,
+) {
+  if (config.learnAheadMinutes <= 0 || !['learning', 'relearning'].includes(card.srsState)) return false;
+  const dueAt = new Date(card.srsDueAt).getTime();
+  return dueAt > now.getTime()
+    && dueAt <= now.getTime() + config.learnAheadMinutes * 60_000;
+}
+
 export function isLessonRecapComplete(
   cards: readonly { srsState: SrsState }[],
 ) {

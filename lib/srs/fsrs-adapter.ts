@@ -21,7 +21,7 @@ export function scheduleCardWithFsrs(
     enable_fuzz: false,
     maximum_interval: config.maxIntervalDays,
     learning_steps: config.learningStepsMinutes.slice(1).map(minutes => `${minutes}m` as `${number}m`),
-    relearning_steps: config.learningStepsMinutes.slice(1).map(minutes => `${minutes}m` as `${number}m`),
+    relearning_steps: config.relearningStepsMinutes.map(minutes => `${minutes}m` as `${number}m`),
   });
   const result = scheduler.next({
     due: card.due,
