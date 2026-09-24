@@ -23,9 +23,15 @@ CREATE TABLE IF NOT EXISTS profiles (
   user_id UUID UNIQUE REFERENCES app_users(id) ON DELETE CASCADE,
   native_language_code TEXT NOT NULL DEFAULT 'en',
   active_target_language_code TEXT NOT NULL DEFAULT 'it',
-  active_source_language_code TEXT NOT NULL DEFAULT 'en'
+  active_source_language_code TEXT NOT NULL DEFAULT 'en',
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  srs_new_cards_per_day INTEGER NOT NULL DEFAULT 15,
+  srs_max_reviews_per_day INTEGER NOT NULL DEFAULT 150
 );
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS active_source_language_code TEXT NOT NULL DEFAULT 'en';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS srs_new_cards_per_day INTEGER NOT NULL DEFAULT 15;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS srs_max_reviews_per_day INTEGER NOT NULL DEFAULT 150;
 CREATE TABLE IF NOT EXISTS lessons (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL, language_code TEXT NOT NULL,
   title TEXT NOT NULL, raw_notes TEXT NOT NULL, short_story TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -104,6 +110,44 @@ CREATE TABLE IF NOT EXISTS user_lexemes (
 CREATE INDEX IF NOT EXISTS user_lexemes_due_idx
   ON user_lexemes(user_id, next_review_at);
 
+ALTER TABLE user_lexemes
+  ADD COLUMN IF NOT EXISTS srs_card_type TEXT NOT NULL DEFAULT 'vocabulary',
+  ADD COLUMN IF NOT EXISTS srs_difficulty DOUBLE PRECISION NOT NULL DEFAULT 5,
+  ADD COLUMN IF NOT EXISTS srs_stability_days DOUBLE PRECISION NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS srs_state TEXT NOT NULL DEFAULT 'new',
+  ADD COLUMN IF NOT EXISTS srs_learning_step INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS srs_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS srs_last_review_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS srs_reps INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS srs_lapses INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS srs_leech BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS srs_algorithm_version TEXT NOT NULL DEFAULT 'legacy-v1';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_lexemes_srs_card_type_check'
+  ) THEN
+    ALTER TABLE user_lexemes
+      ADD CONSTRAINT user_lexemes_srs_card_type_check
+        CHECK (srs_card_type IN ('vocabulary'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_lexemes_srs_state_check'
+  ) THEN
+    ALTER TABLE user_lexemes
+      ADD CONSTRAINT user_lexemes_srs_state_check
+        CHECK (srs_state IN ('new', 'learning', 'review', 'relearning', 'suspended'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS user_lexemes_srs_due_idx
+  ON user_lexemes(user_id, srs_card_type, srs_due_at);
+
+CREATE INDEX IF NOT EXISTS user_lexemes_srs_leech_idx
+  ON user_lexemes(user_id, srs_leech)
+  WHERE srs_leech = TRUE;
+
 CREATE TABLE IF NOT EXISTS lesson_lexemes (
   lesson_id UUID NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
   lexeme_id UUID NOT NULL REFERENCES language_lexemes(id) ON DELETE CASCADE,
@@ -114,6 +158,34 @@ CREATE TABLE IF NOT EXISTS lesson_lexemes (
 
 CREATE INDEX IF NOT EXISTS lesson_lexemes_lexeme_idx
   ON lesson_lexemes(lexeme_id);
+
+CREATE TABLE IF NOT EXISTS vocabulary_review_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  card_id UUID NOT NULL REFERENCES user_lexemes(id) ON DELETE CASCADE,
+  word_id UUID NOT NULL REFERENCES language_lexemes(id) ON DELETE CASCADE,
+  reviewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  card_type TEXT NOT NULL DEFAULT 'vocabulary',
+  user_answer TEXT,
+  correct BOOLEAN NOT NULL,
+  response_time_ms INTEGER,
+  grade TEXT NOT NULL,
+  state_before TEXT NOT NULL,
+  state_after TEXT NOT NULL,
+  interval_before_days DOUBLE PRECISION NOT NULL DEFAULT 0,
+  interval_after_days DOUBLE PRECISION NOT NULL DEFAULT 0,
+  algorithm_version TEXT NOT NULL,
+  CONSTRAINT vocabulary_review_log_card_type_check CHECK (card_type IN ('vocabulary')),
+  CONSTRAINT vocabulary_review_log_grade_check CHECK (grade IN ('again', 'hard', 'good', 'easy', 'manual', 'migration')),
+  CONSTRAINT vocabulary_review_log_response_time_check CHECK (response_time_ms IS NULL OR response_time_ms >= 0),
+  CONSTRAINT vocabulary_review_log_interval_check CHECK (interval_before_days >= 0 AND interval_after_days >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS vocabulary_review_log_card_idx
+  ON vocabulary_review_log(user_id, card_id, reviewed_at DESC);
+
+CREATE INDEX IF NOT EXISTS vocabulary_review_log_user_time_idx
+  ON vocabulary_review_log(user_id, reviewed_at DESC);
 
 CREATE TABLE IF NOT EXISTS language_lexeme_conjugations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

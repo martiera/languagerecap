@@ -6,7 +6,7 @@ import { getLanguage, languages } from '@/lib/languages';
 import { useRouter } from 'next/navigation';
 
 type Word = { targetText: string; translation: string; type: string; isIrregular?: boolean; conjugations?: unknown[] };
-type Result = { vocabulary: Word[] };
+type Result = { vocabulary: Word[]; shortStory: string };
 
 function Speak({ text, language }: { text: string; language: string }) {
   return <button aria-label={`Play pronunciation for ${text}`} onClick={() => {
@@ -85,7 +85,7 @@ export default function NewLessonPage() {
           words: result.vocabulary.filter((_, index) => selected.includes(index)),
           targetLanguage,
           sourceLanguage,
-          shortStory: '',
+          shortStory: result.shortStory || '',
           title: `${target.name} lesson for ${source.name}`,
         }),
       });
