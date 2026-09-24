@@ -34,6 +34,7 @@ test('session completion requires a correct retry for every failed card', () => 
   assert.equal(isDailySessionComplete([], ['a'], new Set()), false);
   assert.equal(isDailySessionComplete([], ['a'], new Set(['a'])), true);
   assert.equal(isDailySessionComplete(['a'], [], new Set()), false);
+  assert.equal(isDailySessionComplete([], ['a', 'a'], new Set(['a'])), true);
 });
 
 test('day keys follow the user time zone at UTC date boundaries', () => {

@@ -5,7 +5,11 @@ export type AnswerOptions = {
 };
 
 function normalize(value: string, diacriticsSensitive: boolean) {
-  const normalized = value.trim().toLocaleLowerCase();
+  const normalized = value
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
   return diacriticsSensitive ? normalized : normalized.normalize('NFD').replace(/\p{M}/gu, '');
 }
 
@@ -29,8 +33,10 @@ function article(value: string) {
 
 export function checkAnswer(input: string, expected: string, options: AnswerOptions) {
   const actual = normalize(input, options.diacriticsSensitive);
-  const answer = normalize(expected, options.diacriticsSensitive);
-  if (options.requireArticleGender && article(answer) && article(actual) !== article(answer)) return false;
-  if (actual === answer) return true;
-  return answer.length >= 4 && distance(actual, answer) <= options.typoTolerance;
+  return expected.split('/').some((candidate) => {
+    const answer = normalize(candidate, options.diacriticsSensitive);
+    if (options.requireArticleGender && article(answer) && article(actual) !== article(answer)) return false;
+    if (actual === answer) return true;
+    return answer.length >= 4 && distance(actual, answer) <= options.typoTolerance;
+  });
 }

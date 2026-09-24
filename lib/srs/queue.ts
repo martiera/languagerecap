@@ -62,7 +62,8 @@ export function isDailySessionComplete(
   failedCardIds: readonly string[],
   correctlyAnsweredCardIds: ReadonlySet<string>,
 ) {
-  return dueCardIds.length === 0 && failedCardIds.every(cardId => correctlyAnsweredCardIds.has(cardId));
+  return new Set(dueCardIds).size === 0
+    && failedCardIds.every(cardId => correctlyAnsweredCardIds.has(cardId));
 }
 
 export function localDayKey(now: Date, timezone: string) {

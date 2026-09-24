@@ -39,7 +39,9 @@ export async function PUT(request: Request) {
     const body = await request.json();
     const sourceLanguage = body.sourceLanguage;
     const targetLanguage = body.targetLanguage;
-    if (typeof sourceLanguage !== 'string' || !supportsLanguage(sourceLanguage) || typeof targetLanguage !== 'string' || !supportsLanguage(targetLanguage) || sourceLanguage === targetLanguage) {
+    const hasSourceLanguage = sourceLanguage !== undefined;
+    const hasTargetLanguage = targetLanguage !== undefined;
+    if (hasSourceLanguage !== hasTargetLanguage || (hasSourceLanguage && (typeof sourceLanguage !== 'string' || !supportsLanguage(sourceLanguage) || typeof targetLanguage !== 'string' || !supportsLanguage(targetLanguage) || sourceLanguage === targetLanguage))) {
       return NextResponse.json({ error: 'Choose two different supported languages.' }, { status: 400 });
     }
     const timezone = body.timezone === undefined ? undefined : body.timezone;
@@ -71,8 +73,8 @@ export async function PUT(request: Request) {
     await ensureProfile(user.id);
     const result = await pool.query(
       `UPDATE profiles
-       SET active_source_language_code=$1,
-           active_target_language_code=$2,
+       SET active_source_language_code=COALESCE($1, active_source_language_code),
+           active_target_language_code=COALESCE($2, active_target_language_code),
            timezone=COALESCE($3, timezone),
            srs_new_cards_per_day=COALESCE($4, srs_new_cards_per_day),
            srs_max_reviews_per_day=COALESCE($5, srs_max_reviews_per_day),
@@ -88,7 +90,7 @@ export async function PUT(request: Request) {
                  srs_diacritics_sensitive AS "diacriticsSensitive",
                  srs_typo_tolerance AS "typoTolerance",
                  srs_require_article_gender AS "requireArticleGender"`,
-      [sourceLanguage, targetLanguage, timezone ?? null, maxNewCardsPerDay ?? null, maxReviewsPerDay ?? null, diacriticsSensitive ?? null, typoTolerance ?? null, requireArticleGender ?? null, user.id],
+      [sourceLanguage ?? null, targetLanguage ?? null, timezone ?? null, maxNewCardsPerDay ?? null, maxReviewsPerDay ?? null, diacriticsSensitive ?? null, typoTolerance ?? null, requireArticleGender ?? null, user.id],
     );
     return NextResponse.json(result.rows[0]);
   } catch (error) {
