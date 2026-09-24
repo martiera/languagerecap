@@ -14,7 +14,9 @@ function readSecret(name: string) {
 
 export function getRuntimeConfig() {
   return {
-    databaseUrl: readSecret('DATABASE_URL'),
+    databaseUrl: process.env.NODE_ENV === 'test'
+      ? readSecret('TEST_DATABASE_URL')
+      : readSecret('DATABASE_URL'),
     authSecret: readSecret('AUTH_SECRET'),
     geminiApiKey: readSecret('GEMINI_API_KEY'),
     geminiModel: process.env.GEMINI_MODEL || '',

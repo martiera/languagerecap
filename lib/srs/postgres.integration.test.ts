@@ -7,7 +7,49 @@ import { GET, POST } from '@/app/api/words/review/route';
 import { defaultSrsConfig, type VocabularyCardState } from './scheduler';
 import { scheduleVocabularyCard } from './schedule';
 
-const enabled = Boolean(process.env.DATABASE_URL);
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+if (!testDatabaseUrl) {
+  throw new Error('SRS integration tests require TEST_DATABASE_URL; refusing to run without an explicit test database.');
+}
+
+let databaseName: string;
+try {
+  databaseName = decodeURIComponent(new URL(testDatabaseUrl).pathname.replace(/^\/+/, ''));
+} catch {
+  throw new Error('SRS integration tests require TEST_DATABASE_URL to be a valid PostgreSQL connection URL.');
+}
+if (!/(test|verify|scratch)/i.test(databaseName)) {
+  throw new Error(`SRS integration tests refuse database "${databaseName}". Use a database name containing test, verify, or scratch.`);
+}
+const enabled = true;
+
+const requiredTables = [
+  'app_users',
+  'app_sessions',
+  'profiles',
+  'language_lexemes',
+  'language_lexeme_senses',
+  'user_lexemes',
+  'vocabulary_review_log',
+];
+
+test.before(async () => {
+  const missing = [];
+  for (const table of requiredTables) {
+    const result = await pool.query('SELECT to_regclass($1) AS table_name', [`public.${table}`]);
+    if (!result.rows[0]?.table_name) missing.push(table);
+  }
+  if (missing.length) {
+    throw new Error(`SRS integration test schema is missing: ${missing.join(', ')}. Apply lib/schema.sql to the test database first.`);
+  }
+});
+
+/*
+ * These tests insert into app_users, profiles, language_lexemes,
+ * language_lexeme_senses, user_lexemes, and app_sessions through createSession.
+ * The review route inserts into and updates vocabulary_review_log and
+ * user_lexemes. Cleanup deletes app_users, cascading to dependent rows.
+ */
 
 async function seedCard(options: { newCardsPerDay?: number } = {}) {
   const suffix = randomUUID();
