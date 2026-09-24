@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { pool } from '@/lib/db';
 import { requireUser } from '@/lib/auth';
 import { supportsLanguage } from '@/lib/languages';
+import { SRS_LIMITS, isValidTimezone } from '@/lib/srs/config';
+import { defaultSrsConfig } from '@/lib/srs/scheduler';
 
 export async function GET(request: Request) {
   try {
@@ -11,8 +13,19 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unsupported language.' }, { status: 400 });
     }
 
-    const params = requestedTarget ? [user.id, requestedTarget] : [user.id];
-    const targetFilter = requestedTarget ? ' AND pairs.target_language=$2' : '';
+    const profile = await pool.query(
+      `SELECT COALESCE(timezone, 'UTC') AS timezone,
+              COALESCE(srs_new_cards_per_day, $2) AS new_limit
+       FROM profiles WHERE user_id=$1`,
+      [user.id, SRS_LIMITS.defaultNewCardsPerDay],
+    );
+    const timezone = profile.rows[0]?.timezone || 'UTC';
+    if (!isValidTimezone(timezone)) {
+      return NextResponse.json({ error: 'Your saved time zone is invalid.' }, { status: 500 });
+    }
+    const newLimit = Number(profile.rows[0]?.new_limit || SRS_LIMITS.defaultNewCardsPerDay);
+    const params = requestedTarget ? [user.id, timezone, newLimit, requestedTarget] : [user.id, timezone, newLimit];
+    const targetFilter = requestedTarget ? ' AND pairs.target_language=$4' : '';
     const result = await pool.query(
       `WITH pairs AS (
          SELECT DISTINCT l.language_code AS target_language, s.source_language_code
@@ -47,20 +60,27 @@ export async function GET(request: Request) {
             WHERE ul.user_id=$1 AND l.language_code=pairs.target_language
               AND s.source_language_code=pairs.source_language_code
               AND ul.srs_state='review'
-              AND ul.srs_stability_days >= 21)::int AS mastered,
+              AND ul.srs_stability_days >= ${defaultSrsConfig.learnedThresholdDays})::int AS mastered,
            (SELECT COUNT(*) FROM user_lexemes ul
             JOIN language_lexemes l ON l.id=ul.lexeme_id
             JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
             WHERE ul.user_id=$1 AND l.language_code=pairs.target_language
               AND s.source_language_code=pairs.source_language_code
               AND ul.srs_state IN ('learning', 'relearning', 'review')
-              AND ul.srs_due_at<=NOW())::int AS due,
-           (SELECT COUNT(*) FROM user_lexemes ul
+              AND ul.srs_due_at < (
+                date_trunc('day', NOW() AT TIME ZONE $2) + INTERVAL '1 day'
+              ) AT TIME ZONE $2)::int AS due,
+           LEAST((SELECT COUNT(*) FROM user_lexemes ul
             JOIN language_lexemes l ON l.id=ul.lexeme_id
             JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
             WHERE ul.user_id=$1 AND l.language_code=pairs.target_language
               AND s.source_language_code=pairs.source_language_code
-              AND ul.srs_state='new')::int AS "newAvailable",
+              AND ul.srs_state='new')::int,
+             GREATEST(0, $3 - (SELECT COUNT(*) FROM vocabulary_review_log log
+              WHERE log.user_id=$1
+                AND log.reviewed_at >= date_trunc('day', NOW() AT TIME ZONE $2) AT TIME ZONE $2
+                AND log.state_before='new'
+                AND log.grade <> 'migration')))::int AS "newAvailable",
            (SELECT COUNT(*) FROM vocabulary_review_log log
             JOIN user_lexemes ul ON ul.id=log.card_id
             JOIN language_lexemes l ON l.id=ul.lexeme_id

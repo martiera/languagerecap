@@ -7,7 +7,7 @@ const config: SrsConfig = { ...defaultSrsConfig, random: () => 0.5 };
 
 function card(overrides: Partial<VocabularyCardState> = {}): VocabularyCardState {
   return {
-    cardType: 'vocabulary',
+    cardType: 'recognition',
     difficulty: 5,
     stability: 0,
     state: 'new',

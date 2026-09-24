@@ -11,6 +11,13 @@ export type DailyQueueUsage = {
   newToday: number;
 };
 
+export function isLessonRecapComplete(
+  cards: readonly { srsState: SrsState; srsStability: number }[],
+  learnedThresholdDays: number,
+) {
+  return cards.length > 0 && cards.every(card => card.srsState === 'review' && card.srsStability >= learnedThresholdDays);
+}
+
 export function selectStudyQueue<T extends QueueCard>(
   cards: readonly T[],
   usage: DailyQueueUsage,

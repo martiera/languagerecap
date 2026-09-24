@@ -1,5 +1,5 @@
 ALTER TABLE user_lexemes
-  ADD COLUMN IF NOT EXISTS srs_card_type TEXT NOT NULL DEFAULT 'vocabulary',
+  ADD COLUMN IF NOT EXISTS srs_card_type TEXT NOT NULL DEFAULT 'recognition',
   ADD COLUMN IF NOT EXISTS srs_difficulty DOUBLE PRECISION NOT NULL DEFAULT 5,
   ADD COLUMN IF NOT EXISTS srs_stability_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS srs_state TEXT NOT NULL DEFAULT 'new',
@@ -15,12 +15,13 @@ ALTER TABLE user_lexemes
   DROP CONSTRAINT IF EXISTS user_lexemes_srs_card_type_check,
   DROP CONSTRAINT IF EXISTS user_lexemes_srs_state_check,
   ADD CONSTRAINT user_lexemes_srs_card_type_check
-    CHECK (srs_card_type IN ('vocabulary')),
+    CHECK (srs_card_type IN ('recognition', 'production', 'cloze')),
   ADD CONSTRAINT user_lexemes_srs_state_check
     CHECK (srs_state IN ('new', 'learning', 'review', 'relearning', 'suspended'));
 
 UPDATE user_lexemes
 SET
+  srs_card_type = CASE WHEN srs_card_type = 'vocabulary' THEN 'recognition' ELSE srs_card_type END,
   srs_state = CASE WHEN mastery_level > 0 THEN 'review' ELSE 'new' END,
   srs_learning_step = 0,
   srs_due_at = next_review_at AT TIME ZONE 'UTC',
@@ -42,7 +43,7 @@ CREATE TABLE IF NOT EXISTS vocabulary_review_log (
   card_id UUID NOT NULL REFERENCES user_lexemes(id) ON DELETE CASCADE,
   word_id UUID NOT NULL REFERENCES language_lexemes(id) ON DELETE CASCADE,
   reviewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  card_type TEXT NOT NULL DEFAULT 'vocabulary',
+  card_type TEXT NOT NULL DEFAULT 'recognition',
   user_answer TEXT,
   correct BOOLEAN NOT NULL,
   response_time_ms INTEGER,
@@ -52,7 +53,7 @@ CREATE TABLE IF NOT EXISTS vocabulary_review_log (
   interval_before_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   interval_after_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   algorithm_version TEXT NOT NULL,
-  CONSTRAINT vocabulary_review_log_card_type_check CHECK (card_type IN ('vocabulary')),
+  CONSTRAINT vocabulary_review_log_card_type_check CHECK (card_type IN ('recognition', 'production', 'cloze')),
   CONSTRAINT vocabulary_review_log_grade_check CHECK (grade IN ('again', 'hard', 'good', 'easy', 'manual', 'migration')),
   CONSTRAINT vocabulary_review_log_response_time_check CHECK (response_time_ms IS NULL OR response_time_ms >= 0),
   CONSTRAINT vocabulary_review_log_interval_check CHECK (interval_before_days >= 0 AND interval_after_days >= 0)
@@ -92,7 +93,7 @@ SELECT
   ul.id,
   ul.lexeme_id,
   COALESCE(ul.srs_last_review_at, ul.created_at AT TIME ZONE 'UTC'),
-  'vocabulary',
+  'recognition',
   NULL,
   ul.mastery_level > 0,
   NULL,

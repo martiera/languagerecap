@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { pool } from '@/lib/db';
 import { requireUser } from '@/lib/auth';
+import { defaultSrsConfig } from '@/lib/srs/scheduler';
 
 export async function POST(request: Request) {
   const client = await pool.connect();
@@ -42,9 +43,9 @@ export async function POST(request: Request) {
          interval_after_days, algorithm_version
        )
        SELECT
-         ul.user_id, ul.id, ul.lexeme_id, 'vocabulary', 'restart', FALSE,
+         ul.user_id, ul.id, ul.lexeme_id, 'recognition', 'restart', FALSE,
          'manual', ul.srs_state, 'new', ul.srs_stability_days,
-         0, 'fsrs-v1'
+         0, 'ladder-v1'
        FROM user_lexemes ul
        JOIN language_lexemes l ON l.id=ul.lexeme_id
        WHERE ul.user_id=$1${filter}`,
@@ -55,16 +56,20 @@ export async function POST(request: Request) {
        SET mastery_level=0,
            next_review_at=NOW(),
            last_reviewed_at=NULL,
-           srs_difficulty=5,
+           srs_difficulty=${defaultSrsConfig.initialDifficulty},
            srs_stability_days=0,
            srs_state='new',
+           srs_card_type='recognition',
            srs_learning_step=0,
            srs_due_at=NOW(),
            srs_last_review_at=NULL,
            srs_reps=0,
            srs_lapses=0,
            srs_leech=FALSE,
-           srs_algorithm_version='fsrs-v1'
+           srs_algorithm_version='ladder-v1',
+           srs_recognition_successes=0,
+           srs_production_unlocked=FALSE,
+           srs_cloze_unlocked=FALSE
        FROM language_lexemes l
        WHERE ul.lexeme_id=l.id AND ul.user_id=$1${filter}`,
       params,
