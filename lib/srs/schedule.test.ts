@@ -74,6 +74,30 @@ test('production selector uses FSRS with real elapsed time and no application fu
   assert.ok(next.card.stability > 0);
 });
 
+test('FSRS production scheduling respects the configured maximum interval', () => {
+  const config = { ...defaultSrsConfig, algorithm: 'fsrs' as const, random: Math.random };
+  let current = card();
+  let reviewTime = now;
+  for (let review = 0; review < 12; review += 1) {
+    current = scheduleVocabularyCard(current, 'good', reviewTime, config).card;
+    assert.ok((current.due.getTime() - reviewTime.getTime()) / 86_400_000 <= config.maxIntervalDays);
+    reviewTime = current.due;
+  }
+});
+
+test('FSRS native lapse scheduling shortens a reviewed card above zero', () => {
+  const config = { ...defaultSrsConfig, algorithm: 'fsrs' as const, random: Math.random };
+  const current = scheduleVocabularyCard(
+    card({ state: 'review', stability: 35, baseInterval: 35, due: now, lastReview: now, reps: 10 }),
+    'again',
+    now,
+    config,
+  ).card;
+  assert.equal(current.state, 'relearning');
+  assert.ok(current.stability > 0);
+  assert.ok(current.stability < 35);
+});
+
 for (const algorithm of ['ladder', 'fsrs'] as const) {
   test(`${algorithm} production path handles early, on-time, and late reviews`, () => {
     const config = { ...defaultSrsConfig, algorithm };

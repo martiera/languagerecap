@@ -20,6 +20,7 @@ export type SrsConfig = {
   algorithm: SrsAlgorithm;
   learningStepsMinutes: readonly [number, number, number];
   longTermIntervalsDays: readonly number[];
+  /** Applies to ladder lapses only; FSRS uses its native lapse scheduling. */
   lapseRatio: number;
   lapseMinRatio: number;
   lapseMaxRatio: number;
