@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Brand } from '@/components/Brand';
 
 const steps = [
   ['01', 'Bring your lesson', 'Paste notes from class, a tutor, or real life.'],
@@ -10,7 +11,7 @@ export default function LandingPage() {
   return <main className="shell grid-paper min-h-screen">
     <div className="mx-auto max-w-6xl px-5 py-6 md:px-10 md:py-9">
       <header className="flex items-center justify-between border-b border-[#173c3b22] pb-6">
-        <Link href="/" className="flex items-center gap-2"><span className="text-2xl">◒</span><span className="serif text-2xl font-bold">LanguageRecap</span></Link>
+        <Link href="/" aria-label="LanguageRecap home"><Brand className="h-8 w-auto" /></Link>
         <nav className="flex items-center gap-5 text-sm font-bold"><Link href="/login" className="text-[#6f7e76]">Log in</Link><Link href="/login?register=true" className="rounded-md bg-[#173c3b] px-4 py-2 text-white">Create account</Link></nav>
       </header>
       <section className="grid gap-10 py-16 md:grid-cols-[1.05fr_.95fr] md:items-center md:py-24">

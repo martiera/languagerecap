@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { getLanguage, languages } from '@/lib/languages';
+import { Brand } from '@/components/Brand';
 import { useRouter } from 'next/navigation';
 
 type PairStats = {
@@ -99,7 +100,7 @@ export default function LearnDashboard() {
 
   return <main className="shell grid-paper min-h-screen"><div className="mx-auto max-w-6xl px-5 py-6 md:px-10 md:py-9">
     <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#173c3b22] pb-6">
-      <Link href="/learn" className="flex items-center gap-2"><span className="text-2xl">◒</span><span className="serif text-2xl font-bold">LanguageRecap</span></Link>
+      <Link href="/learn" aria-label="LanguageRecap dashboard"><Brand className="h-8 w-auto" /></Link>
       <div className="flex flex-wrap items-center justify-end gap-2"><span className="hidden rounded-md border border-[#173c3b22] bg-[#fffaf1] px-3 py-2 text-xs text-[#6f7e76] sm:block">{userEmail}</span><Link href="/profile" className="rounded-md border border-[#173c3b] px-3 py-2 text-xs font-bold text-[#173c3b]">Account</Link><button type="button" onClick={logout} className="rounded-md border border-[#173c3b] px-3 py-2 text-xs font-bold text-[#173c3b]">Log out</button></div>
     </header>
     <section className="flex flex-col gap-6 py-10 md:flex-row md:items-end md:justify-between md:py-16"><div><span className="pill bg-[#b7c9ad66]">Your learning dashboard</span><h1 className="serif mt-5 text-5xl font-bold md:text-7xl">Ready for your <i>recap?</i></h1><p className="mt-5 max-w-xl text-lg leading-8 text-[#6f7e76]">Choose one of your saved language pairs and keep the learning rhythm.</p></div>{activePair ? <Link href="/review" className="rounded-md bg-[#e56f50] px-6 py-4 text-center text-sm font-bold text-white shadow-[5px_5px_0_#e5b94e66]">Start recap {activePair.due > 0 ? `· ${activePair.due} due` : '→'}</Link> : <span className="rounded-md border border-[#173c3b33] bg-[#f5f1e9] px-6 py-4 text-center text-sm font-bold text-[#6f7e76]">Recap unavailable</span>}</section>
