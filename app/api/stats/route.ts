@@ -46,18 +46,53 @@ export async function GET(request: Request) {
             JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
             WHERE ul.user_id=$1 AND l.language_code=pairs.target_language
               AND s.source_language_code=pairs.source_language_code
-              AND ul.mastery_level=3)::int AS mastered,
+              AND ul.srs_state='review'
+              AND ul.srs_stability_days >= 21)::int AS mastered,
            (SELECT COUNT(*) FROM user_lexemes ul
             JOIN language_lexemes l ON l.id=ul.lexeme_id
             JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
             WHERE ul.user_id=$1 AND l.language_code=pairs.target_language
               AND s.source_language_code=pairs.source_language_code
-              AND ul.mastery_level=3 AND ul.next_review_at<=NOW())::int AS due
+              AND ul.srs_state IN ('learning', 'relearning', 'review')
+              AND ul.srs_due_at<=NOW())::int AS due,
+           (SELECT COUNT(*) FROM user_lexemes ul
+            JOIN language_lexemes l ON l.id=ul.lexeme_id
+            JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
+            WHERE ul.user_id=$1 AND l.language_code=pairs.target_language
+              AND s.source_language_code=pairs.source_language_code
+              AND ul.srs_state='new')::int AS "newAvailable",
+           (SELECT COUNT(*) FROM vocabulary_review_log log
+            JOIN user_lexemes ul ON ul.id=log.card_id
+            JOIN language_lexemes l ON l.id=ul.lexeme_id
+            JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
+            WHERE log.user_id=$1
+              AND log.reviewed_at >= NOW() - INTERVAL '30 days'
+              AND log.state_before='review'
+              AND l.language_code=pairs.target_language
+              AND s.source_language_code=pairs.source_language_code
+              AND log.correct)::int AS "retentionCorrect",
+           (SELECT COUNT(*) FROM vocabulary_review_log log
+            JOIN user_lexemes ul ON ul.id=log.card_id
+            JOIN language_lexemes l ON l.id=ul.lexeme_id
+            JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
+            WHERE log.user_id=$1
+              AND log.reviewed_at >= NOW() - INTERVAL '30 days'
+              AND log.state_before='review'
+              AND l.language_code=pairs.target_language
+              AND s.source_language_code=pairs.source_language_code)::int AS "retentionTotal",
+           (SELECT COALESCE(SUM(log.response_time_ms), 0) FROM vocabulary_review_log log
+            JOIN user_lexemes ul ON ul.id=log.card_id
+            JOIN language_lexemes l ON l.id=ul.lexeme_id
+            JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
+            WHERE log.user_id=$1
+              AND l.language_code=pairs.target_language
+              AND s.source_language_code=pairs.source_language_code)::bigint AS "timeSpentMs"
          FROM pairs
        )
        SELECT source_language_code AS "sourceLanguage",
               target_language AS "targetLanguage",
-              words, lessons, mastered, due
+              words, lessons, mastered, due, "newAvailable",
+              "retentionCorrect", "retentionTotal", "timeSpentMs"
        FROM counts
        WHERE words > 0${targetFilter}
        ORDER BY target_language, source_language_code
