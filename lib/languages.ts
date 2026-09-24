@@ -15,6 +15,7 @@ export const languages: LanguageCapability[] = [
   { code: 'fr', name: 'French', flag: '🇫🇷', locale: 'fr-FR', vocabularyReview: true, conjugationReview: false, generatedPresent: false },
   { code: 'de', name: 'German', flag: '🇩🇪', locale: 'de-DE', vocabularyReview: true, conjugationReview: false, generatedPresent: false },
   { code: 'lv', name: 'Latvian', flag: '🇱🇻', locale: 'lv-LV', vocabularyReview: true, conjugationReview: false, generatedPresent: false },
+  { code: 'sv', name: 'Swedish', flag: '🇸🇪', locale: 'sv-SE', vocabularyReview: true, conjugationReview: false, generatedPresent: false },
 ];
 
 export const supportedLanguageCodes = languages.map((language) => language.code);

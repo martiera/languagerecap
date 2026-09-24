@@ -12,7 +12,7 @@
 - `From` means the language being learned.
 - `To` means the native/translation language.
 - Current default: Italian -> Latvian.
-- Supported languages: English, Italian, Spanish, French, German, Latvian.
+- Supported languages: English, Italian, Spanish, French, German, Latvian, Swedish.
 - Language pair is persisted in browser localStorage:
   - `languagerecap-learning-language`
   - `languagerecap-native-language`

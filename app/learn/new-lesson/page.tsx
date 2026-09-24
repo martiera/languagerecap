@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { languages } from '@/lib/languages';
+import { getLanguage, languages } from '@/lib/languages';
 import { useRouter } from 'next/navigation';
 
 type Word = { targetText: string; translation: string; type: string; isIrregular?: boolean; conjugations?: unknown[] };
@@ -61,7 +61,7 @@ export default function NewLessonPage() {
       const response = await fetch('/api/parse-notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes, sourceLanguage, targetLanguage, extractConjugations: true }),
+        body: JSON.stringify({ notes, sourceLanguage, targetLanguage, extractConjugations: getLanguage(targetLanguage)?.conjugationReview === true }),
       });
       const data = await response.json();
       if (!response.ok) throw Error(data.error);

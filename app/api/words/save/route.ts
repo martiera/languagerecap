@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { pool } from '@/lib/db';
 import { requireUser } from '@/lib/auth';
 import { isRegularItalianVerb } from '@/lib/italian-conjugation';
-import { supportsLanguage } from '@/lib/languages';
+import { getLanguage, supportsLanguage } from '@/lib/languages';
 
 export async function POST(request: Request) {
   const client = await pool.connect();
@@ -25,7 +25,8 @@ export async function POST(request: Request) {
     for (const word of words) {
       if (!word || typeof word.targetText !== 'string' || typeof word.translation !== 'string') continue;
       const type = typeof word.type === 'string' && word.type.trim().toLowerCase() === 'phrase' ? 'phrase' : word.type || 'word';
-      const irregular = type !== 'phrase' && (targetLanguage === 'it' ? Boolean(word.isIrregular) && !isRegularItalianVerb(word.targetText) : Boolean(word.isIrregular));
+      const supportsConjugations = getLanguage(targetLanguage)?.conjugationReview === true;
+      const irregular = type !== 'phrase' && (targetLanguage === 'it' ? Boolean(word.isIrregular) && !isRegularItalianVerb(word.targetText) : supportsConjugations && Boolean(word.isIrregular));
       const lexemeResult = await client.query(
         `INSERT INTO language_lexemes (language_code, target_text, grammatical_type, is_irregular, source)
          VALUES ($1,$2,$3,$4,'lesson_import')
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
          ON CONFLICT (lesson_id, lexeme_id) DO UPDATE SET sense_id=COALESCE(lesson_lexemes.sense_id, EXCLUDED.sense_id)`,
         [lesson.rows[0].id, lexemeId, senseId],
       );
-      const conjugationRows = type !== 'phrase' && Array.isArray(word.conjugations) && (targetLanguage === 'en' || irregular) ? word.conjugations : [];
+      const conjugationRows = supportsConjugations && type !== 'phrase' && Array.isArray(word.conjugations) && (targetLanguage === 'en' || irregular) ? word.conjugations : [];
       for (const conjugation of conjugationRows) {
         if (!conjugation || typeof conjugation.tense !== 'string' || typeof conjugation.person !== 'string' || typeof conjugation.form !== 'string') continue;
         const conjugationResult = await client.query(
