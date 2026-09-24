@@ -3,7 +3,7 @@ export type SrsState = 'new' | 'learning' | 'review' | 'relearning' | 'suspended
 export type SrsAlgorithm = 'fsrs' | 'ladder';
 
 export type VocabularyCardState = {
-  cardType: 'vocabulary';
+  cardType: 'recognition' | 'production' | 'cloze';
   difficulty: number;
   stability: number;
   state: SrsState;
@@ -36,11 +36,12 @@ export type SrsConfig = {
   easyResponseTimeMs: number;
   maxNewCardsPerDay: number;
   maxReviewsPerDay: number;
+  maxIntervalDays: number;
   random: () => number;
 };
 
 export const defaultSrsConfig: SrsConfig = {
-  algorithm: 'fsrs',
+  algorithm: 'ladder',
   learningStepsMinutes: [0, 10, 180],
   longTermIntervalsDays: [1, 3, 7, 16, 35, 75, 150],
   lapseMinRatio: 0.3,
@@ -58,8 +59,9 @@ export const defaultSrsConfig: SrsConfig = {
   easyIntervalMultiplier: 1.3,
   hardResponseTimeMs: 8_000,
   easyResponseTimeMs: 3_000,
-  maxNewCardsPerDay: 15,
-  maxReviewsPerDay: 150,
+  maxNewCardsPerDay: SRS_LIMITS.defaultNewCardsPerDay,
+  maxReviewsPerDay: SRS_LIMITS.defaultReviewsPerDay,
+  maxIntervalDays: 365,
   random: Math.random,
 };
 
@@ -94,6 +96,15 @@ function nextLongTermIndex(stability: number, config: SrsConfig, skip: number) {
   return Math.min(firstFollowing + skip, config.longTermIntervalsDays.length - 1);
 }
 
+function ladderInterval(card: VocabularyCardState, config: SrsConfig, skip: number) {
+  const last = config.longTermIntervalsDays[config.longTermIntervalsDays.length - 1];
+  if (card.stability >= last) {
+    return Math.min(config.maxIntervalDays, Math.max(last, card.stability * 2 ** skip));
+  }
+  const index = nextLongTermIndex(card.stability, config, skip - 1);
+  return config.longTermIntervalsDays[index];
+}
+
 function nextDifficulty(card: VocabularyCardState, grade: SrsGrade, config: SrsConfig) {
   const delta = grade === 'again'
     ? config.difficultyAgainDelta
@@ -105,13 +116,18 @@ function nextDifficulty(card: VocabularyCardState, grade: SrsGrade, config: SrsC
   return clamp(card.difficulty + delta, config.difficultyMin, config.difficultyMax);
 }
 
-function graduate(card: VocabularyCardState, now: Date, grade: SrsGrade, config: SrsConfig) {
+export type ScheduleMetadata = {
+  card: VocabularyCardState;
+  appliedFuzzRatio: number | null;
+};
+
+function graduate(card: VocabularyCardState, now: Date, grade: SrsGrade, config: SrsConfig): ScheduleMetadata {
   const firstInterval = config.longTermIntervalsDays[0];
   const stability = fuzzInterval(
     firstInterval * (grade === 'easy' ? config.easyIntervalMultiplier : grade === 'hard' ? config.hardIntervalMultiplier : 1),
     config,
   );
-  return {
+  const next = {
     ...card,
     difficulty: nextDifficulty(card, grade, config),
     stability,
@@ -122,9 +138,10 @@ function graduate(card: VocabularyCardState, now: Date, grade: SrsGrade, config:
     leech: card.lapses >= config.leechThreshold,
     learningStep: 0,
   };
+  return { card: next, appliedFuzzRatio: stability / (firstInterval * (grade === 'easy' ? config.easyIntervalMultiplier : grade === 'hard' ? config.hardIntervalMultiplier : 1)) - 1 };
 }
 
-export function scheduleCard({ card, grade, now, config }: ScheduleInput): VocabularyCardState {
+export function scheduleCardWithMetadata({ card, grade, now, config }: ScheduleInput): ScheduleMetadata {
   if (grade === 'again') {
     const lapses = card.lapses + 1;
     const lapseRatio = config.lapseMinRatio
@@ -132,7 +149,7 @@ export function scheduleCard({ card, grade, now, config }: ScheduleInput): Vocab
     const stability = card.state === 'review'
       ? Math.max(Number.EPSILON, card.stability * lapseRatio)
       : card.stability;
-    return {
+    return { card: {
       ...card,
       difficulty: nextDifficulty(card, grade, config),
       stability,
@@ -143,7 +160,7 @@ export function scheduleCard({ card, grade, now, config }: ScheduleInput): Vocab
       lapses,
       leech: lapses >= config.leechThreshold,
       learningStep: 0,
-    };
+    }, appliedFuzzRatio: null };
   }
 
   if (card.state !== 'review') {
@@ -152,7 +169,7 @@ export function scheduleCard({ card, grade, now, config }: ScheduleInput): Vocab
     }
     const nextStep = card.learningStep + 1;
     const minutes = config.learningStepsMinutes[nextStep];
-    return {
+    return { card: {
       ...card,
       difficulty: nextDifficulty(card, grade, config),
       state: 'learning',
@@ -161,19 +178,18 @@ export function scheduleCard({ card, grade, now, config }: ScheduleInput): Vocab
       reps: card.reps + 1,
       learningStep: nextStep,
       leech: card.lapses >= config.leechThreshold,
-    };
+    }, appliedFuzzRatio: null };
   }
 
   const skip = grade === 'easy' ? 2 : 1;
-  const index = nextLongTermIndex(card.stability, config, skip - 1);
-  const ladderInterval = config.longTermIntervalsDays[index];
+  const baseInterval = ladderInterval(card, config, skip);
   const rawInterval = grade === 'hard'
-    ? Math.max(card.stability, ladderInterval * config.hardIntervalMultiplier)
+    ? Math.max(card.stability, baseInterval * config.hardIntervalMultiplier)
     : grade === 'easy'
-      ? ladderInterval * config.easyIntervalMultiplier
-      : ladderInterval;
+      ? baseInterval * config.easyIntervalMultiplier
+      : baseInterval;
   const stability = fuzzInterval(rawInterval, config);
-  return {
+  return { card: {
     ...card,
     difficulty: nextDifficulty(card, grade, config),
     stability,
@@ -182,7 +198,11 @@ export function scheduleCard({ card, grade, now, config }: ScheduleInput): Vocab
     lastReview: now,
     reps: card.reps + 1,
     leech: card.lapses >= config.leechThreshold,
-  };
+  }, appliedFuzzRatio: stability / rawInterval - 1 };
+}
+
+export function scheduleCard(input: ScheduleInput): VocabularyCardState {
+  return scheduleCardWithMetadata(input).card;
 }
 
 export function isLearned(card: VocabularyCardState, config: SrsConfig) {
@@ -195,3 +215,4 @@ export function inferGrade(correct: boolean, responseTimeMs: number | null | und
   if (responseTimeMs !== null && responseTimeMs !== undefined && responseTimeMs >= config.hardResponseTimeMs) return 'hard';
   return 'good';
 }
+import { SRS_LIMITS } from './config';

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultSrsConfig } from './scheduler';
-import { isDailySessionComplete, localDayKey, selectStudyQueue } from './queue';
+import { isDailySessionComplete, isLessonRecapComplete, localDayKey, selectStudyQueue } from './queue';
 
 const config = { ...defaultSrsConfig, random: () => 0.5 };
 const due = new Date('2026-01-01T12:00:00.000Z');
@@ -26,4 +26,9 @@ test('session completion requires a correct retry for every failed card', () => 
 test('day keys follow the user time zone at UTC date boundaries', () => {
   assert.equal(localDayKey(new Date('2026-01-02T00:30:00.000Z'), 'America/New_York'), '2026-01-01');
   assert.equal(localDayKey(new Date('2026-01-02T05:00:00.000Z'), 'America/New_York'), '2026-01-02');
+});
+
+test('lesson recap completes only when every word is learned', () => {
+  assert.equal(isLessonRecapComplete([{ srsState: 'review', srsStability: 21 }], 21), true);
+  assert.equal(isLessonRecapComplete([{ srsState: 'review', srsStability: 21 }, { srsState: 'learning', srsStability: 0 }], 21), false);
 });

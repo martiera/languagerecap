@@ -4,9 +4,11 @@ import { pool } from '@/lib/db';
 import { requireUser } from '@/lib/auth';
 import { isRegularItalianVerb } from '@/lib/italian-conjugation';
 import { supportsLanguage } from '@/lib/languages';
-import { defaultSrsConfig, inferGrade, scheduleCard, type SrsGrade, type SrsState, type VocabularyCardState } from '@/lib/srs/scheduler';
-import { selectStudyQueue } from '@/lib/srs/queue';
-import { scheduleCardWithFsrs } from '@/lib/srs/fsrs-adapter';
+import { SRS_LIMITS, isValidTimezone } from '@/lib/srs/config';
+import { checkAnswer } from '@/lib/srs/answer';
+import { defaultSrsConfig, inferGrade, type SrsGrade, type SrsState, type VocabularyCardState } from '@/lib/srs/scheduler';
+import { isDailySessionComplete, isLessonRecapComplete, selectStudyQueue } from '@/lib/srs/queue';
+import { scheduleVocabularyCard } from '@/lib/srs/schedule';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,23 +38,9 @@ function options(correct: string, distractors: string[], position: number) {
   return values;
 }
 
-function validTimezone(value: unknown) {
-  if (typeof value !== 'string' || !value) return 'UTC';
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
-    return value;
-  } catch {
-    return 'UTC';
-  }
-}
-
-function normalizeAnswer(value: string) {
-  return value.trim().toLocaleLowerCase();
-}
-
 function rowToCard(row: Record<string, unknown>): VocabularyCardState {
   return {
-    cardType: 'vocabulary',
+    cardType: row.cardType as VocabularyCardState['cardType'],
     difficulty: Number(row.srsDifficulty),
     stability: Number(row.srsStability),
     state: row.srsState as SrsState,
@@ -79,15 +67,21 @@ export async function GET(request: Request) {
     const profile = await pool.query(
       `SELECT COALESCE(timezone, 'UTC') AS timezone,
               COALESCE(srs_new_cards_per_day, $2) AS "maxNewCardsPerDay",
-              COALESCE(srs_max_reviews_per_day, $3) AS "maxReviewsPerDay"
+              COALESCE(srs_max_reviews_per_day, $3) AS "maxReviewsPerDay",
+              COALESCE(srs_diacritics_sensitive, FALSE) AS "diacriticsSensitive",
+              COALESCE(srs_typo_tolerance, 1) AS "typoTolerance",
+              COALESCE(srs_require_article_gender, TRUE) AS "requireArticleGender"
        FROM profiles WHERE user_id=$1`,
-      [user.id, defaultSrsConfig.maxNewCardsPerDay, defaultSrsConfig.maxReviewsPerDay],
+      [user.id, SRS_LIMITS.defaultNewCardsPerDay, SRS_LIMITS.defaultReviewsPerDay],
     );
-    const timezone = validTimezone(profile.rows[0]?.timezone);
+    const timezone = profile.rows[0]?.timezone || 'UTC';
+    if (!isValidTimezone(timezone)) {
+      return NextResponse.json({ error: 'Your saved time zone is invalid.' }, { status: 500 });
+    }
     const config = {
       ...defaultSrsConfig,
-      maxNewCardsPerDay: Number(profile.rows[0]?.maxNewCardsPerDay || defaultSrsConfig.maxNewCardsPerDay),
-      maxReviewsPerDay: Number(profile.rows[0]?.maxReviewsPerDay || defaultSrsConfig.maxReviewsPerDay),
+      maxNewCardsPerDay: Number(profile.rows[0]?.maxNewCardsPerDay || SRS_LIMITS.defaultNewCardsPerDay),
+      maxReviewsPerDay: Number(profile.rows[0]?.maxReviewsPerDay || SRS_LIMITS.defaultReviewsPerDay),
     };
     const [daily, queue, allWords] = await Promise.all([
       pool.query(
@@ -160,7 +154,7 @@ export async function GET(request: Request) {
         [user.id, targetLanguage, sourceLanguage, config.maxReviewsPerDay + config.maxNewCardsPerDay],
       ),
       pool.query(
-        `SELECT s.translation
+        `SELECT s.translation, ul.srs_state AS "srsState", ul.srs_stability_days AS "srsStability"
          FROM user_lexemes ul
          JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
          JOIN language_lexemes l ON l.id=ul.lexeme_id
@@ -188,7 +182,14 @@ export async function GET(request: Request) {
       sourceLanguage,
       targetLanguage,
       dueToday: bounded.filter(word => word.srsState !== 'new').length,
-      newAvailable: Math.max(0, Number(queue.rows.filter(row => row.srsState === 'new').length) - newCount),
+      newAvailable: Math.max(0, Math.min(
+        Number(queue.rows.filter(row => row.srsState === 'new').length) - newCount,
+        Math.max(0, config.maxNewCardsPerDay - newToday),
+      )),
+      recapComplete: isLessonRecapComplete(
+        allWords.rows.map(row => ({ srsState: row.srsState as SrsState, srsStability: Number(row.srsStability) })),
+        config.learnedThresholdDays,
+      ),
       reviewsToday,
       newToday,
       limits: {
@@ -217,6 +218,10 @@ export async function POST(request: Request) {
       isCorrect: legacyCorrect,
       responseTimeMs,
       grade: requestedGrade,
+      override,
+      sessionDueIds,
+      sessionFailedIds,
+      sessionCorrectIds,
     } = body;
     if (typeof wordId !== 'string' || itemKind !== 'word') {
       return NextResponse.json({ error: 'Invalid vocabulary review response.' }, { status: 400 });
@@ -233,6 +238,12 @@ export async function POST(request: Request) {
     const explicitGrade = requestedGrade === undefined ? undefined : requestedGrade as SrsGrade;
     if (explicitGrade !== undefined && !['again', 'hard', 'good', 'easy'].includes(explicitGrade)) {
       return NextResponse.json({ error: 'Invalid review grade.' }, { status: 400 });
+    }
+    if (override !== undefined && override !== true) {
+      return NextResponse.json({ error: 'Invalid override.' }, { status: 400 });
+    }
+    if (explicitGrade !== undefined && override !== true) {
+      return NextResponse.json({ error: 'A manual grade requires an explicit override.' }, { status: 400 });
     }
 
     await client.query('BEGIN');
@@ -252,6 +263,9 @@ export async function POST(request: Request) {
          ul.srs_reps AS "srsReps",
          ul.srs_lapses AS "srsLapses",
          ul.srs_leech AS "srsLeech",
+         ul.srs_recognition_successes AS "recognitionSuccesses",
+         ul.srs_production_unlocked AS "productionUnlocked",
+         ul.srs_cloze_unlocked AS "clozeUnlocked",
          s.translation,
          l.language_code AS "targetLanguage",
          s.source_language_code AS "sourceLanguage"
@@ -263,7 +277,7 @@ export async function POST(request: Request) {
       [wordId, user.id],
     );
     const row = current.rows[0];
-    if (!row || row.cardType !== 'vocabulary') {
+    if (!row || !['recognition', 'production', 'cloze'].includes(row.cardType)) {
       await client.query('ROLLBACK');
       return NextResponse.json({ error: 'Review item not found.' }, { status: 404 });
     }
@@ -272,22 +286,69 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Review item does not belong to the selected language pair.' }, { status: 409 });
     }
 
+    const profile = await client.query(
+      `SELECT COALESCE(timezone, 'UTC') AS timezone,
+              COALESCE(srs_new_cards_per_day, $2) AS "maxNewCardsPerDay",
+              COALESCE(srs_max_reviews_per_day, $3) AS "maxReviewsPerDay",
+              COALESCE(srs_diacritics_sensitive, FALSE) AS "diacriticsSensitive",
+              COALESCE(srs_typo_tolerance, 1) AS "typoTolerance",
+              COALESCE(srs_require_article_gender, TRUE) AS "requireArticleGender"
+       FROM profiles WHERE user_id=$1
+       FOR UPDATE`,
+      [user.id, SRS_LIMITS.defaultNewCardsPerDay, SRS_LIMITS.defaultReviewsPerDay],
+    );
+    const timezone = profile.rows[0]?.timezone || 'UTC';
+    if (!isValidTimezone(timezone)) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ error: 'Your saved time zone is invalid.' }, { status: 500 });
+    }
+    const config = {
+      ...defaultSrsConfig,
+      maxNewCardsPerDay: Number(profile.rows[0]?.maxNewCardsPerDay || SRS_LIMITS.defaultNewCardsPerDay),
+      maxReviewsPerDay: Number(profile.rows[0]?.maxReviewsPerDay || SRS_LIMITS.defaultReviewsPerDay),
+    };
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${user.id}:${new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date())}`]);
+    const daily = await client.query(
+      `SELECT
+         COUNT(*) FILTER (
+           WHERE reviewed_at >= date_trunc('day', NOW() AT TIME ZONE $2) AT TIME ZONE $2
+             AND grade <> 'migration'
+         )::int AS reviews_today,
+         COUNT(*) FILTER (
+           WHERE reviewed_at >= date_trunc('day', NOW() AT TIME ZONE $2) AT TIME ZONE $2
+             AND state_before='new'
+             AND grade <> 'migration'
+         )::int AS new_today
+       FROM vocabulary_review_log
+       WHERE user_id=$1`,
+      [user.id, timezone],
+    );
+    const reviewsToday = Number(daily.rows[0]?.reviews_today || 0);
+    const newToday = Number(daily.rows[0]?.new_today || 0);
+    const cardIsNew = row.srsState === 'new';
+    if ((cardIsNew && newToday >= config.maxNewCardsPerDay) || (!cardIsNew && reviewsToday >= config.maxReviewsPerDay)) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ error: 'Today’s review limit has been reached.' }, { status: 429 });
+    }
     const actualCorrect = typeof userAnswer === 'string'
-      ? normalizeAnswer(userAnswer) === normalizeAnswer(row.translation)
-      : typeof legacyCorrect === 'boolean'
+      ? checkAnswer(userAnswer, row.translation, {
+          diacriticsSensitive: Boolean(profile.rows[0]?.diacriticsSensitive),
+          typoTolerance: Number(profile.rows[0]?.typoTolerance || 0),
+          requireArticleGender: Boolean(profile.rows[0]?.requireArticleGender),
+        })
+      : typeof legacyCorrect === 'boolean' && override === true
         ? legacyCorrect
         : undefined;
     if (actualCorrect === undefined && explicitGrade === undefined) {
       await client.query('ROLLBACK');
       return NextResponse.json({ error: 'Answer or grade is required.' }, { status: 400 });
     }
-    const grade: SrsGrade = explicitGrade || inferGrade(Boolean(actualCorrect), responseTimeMs ?? null, defaultSrsConfig);
+    const grade: SrsGrade = explicitGrade || inferGrade(Boolean(actualCorrect), responseTimeMs ?? null, config);
     const correct = explicitGrade ? explicitGrade !== 'again' : Boolean(actualCorrect);
     const card = rowToCard(row);
     const now = new Date();
-    const next = defaultSrsConfig.algorithm === 'fsrs'
-      ? scheduleCardWithFsrs(card, grade, now, defaultSrsConfig)
-      : scheduleCard({ card, grade, now, config: defaultSrsConfig });
+    const scheduled = scheduleVocabularyCard(card, grade, now, config);
+    const next = scheduled.card;
     if (user.isDemo) {
       await client.query('ROLLBACK');
       return NextResponse.json({ isCorrect: correct, grade });
@@ -297,13 +358,17 @@ export async function POST(request: Request) {
       `INSERT INTO vocabulary_review_log (
          user_id, card_id, word_id, card_type, user_answer, correct,
          response_time_ms, grade, state_before, state_after,
-         interval_before_days, interval_after_days, algorithm_version
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+         interval_before_days, interval_after_days, algorithm_version,
+         due_before, due_after, difficulty_before, difficulty_after,
+         learning_step_before, learning_step_after, reps_before, reps_after,
+         lapses_before, lapses_after, leech_before, leech_after,
+         algorithm, applied_fuzz_ratio, answer_source
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)`,
       [
         user.id,
         row.id,
         row.wordId,
-        'vocabulary',
+        card.cardType,
         typeof userAnswer === 'string' ? userAnswer : null,
         correct,
         responseTimeMs ?? null,
@@ -312,9 +377,32 @@ export async function POST(request: Request) {
         next.state,
         card.stability,
         next.stability,
-        `${defaultSrsConfig.algorithm}-v1`,
+        `${config.algorithm}-v1`,
+        card.due,
+        next.due,
+        card.difficulty,
+        next.difficulty,
+        card.learningStep,
+        next.learningStep,
+        card.reps,
+        next.reps,
+        card.lapses,
+        next.lapses,
+        card.leech,
+        next.leech,
+        config.algorithm,
+        scheduled.appliedFuzzRatio,
+        typeof userAnswer === 'string' ? 'typed' : 'override',
       ],
     );
+    const recognitionSuccesses = Number(row.recognitionSuccesses || 0) + (card.cardType === 'recognition' && correct ? 1 : 0);
+    const productionUnlocked = Boolean(row.productionUnlocked) || recognitionSuccesses > 0;
+    const clozeUnlocked = Boolean(row.clozeUnlocked) || recognitionSuccesses > 0;
+    const nextCardType = card.cardType === 'recognition' && correct
+      ? 'production'
+      : card.cardType === 'production' && correct && clozeUnlocked
+        ? 'cloze'
+        : card.cardType;
     const masteryLevel = next.state === 'review' ? Math.min(5, Math.max(1, next.reps)) : 0;
     await client.query(
       `UPDATE user_lexemes
@@ -330,8 +418,12 @@ export async function POST(request: Request) {
            srs_reps=$8,
            srs_lapses=$9,
            srs_leech=$10,
-           srs_algorithm_version=$11
-       WHERE id=$12 AND user_id=$13`,
+           srs_algorithm_version=$11,
+           srs_card_type=$12,
+           srs_recognition_successes=$13,
+           srs_production_unlocked=$14,
+           srs_cloze_unlocked=$15
+       WHERE id=$16 AND user_id=$17`,
       [
         masteryLevel,
         next.due,
@@ -343,12 +435,21 @@ export async function POST(request: Request) {
         next.reps,
         next.lapses,
         next.leech,
-        `${defaultSrsConfig.algorithm}-v1`,
+        `${config.algorithm}-v1`,
+        nextCardType,
+        recognitionSuccesses,
+        productionUnlocked,
+        clozeUnlocked,
         row.id,
         user.id,
       ],
     );
     await client.query('COMMIT');
+    const dueIds = Array.isArray(sessionDueIds) ? sessionDueIds.filter((value): value is string => typeof value === 'string') : [];
+    const failedIds = Array.isArray(sessionFailedIds) ? sessionFailedIds.filter((value): value is string => typeof value === 'string') : [];
+    const correctIds = new Set(Array.isArray(sessionCorrectIds) ? sessionCorrectIds.filter((value): value is string => typeof value === 'string') : []);
+    if (!correct && !failedIds.includes(row.id)) failedIds.push(row.id);
+    if (correct && failedIds.includes(row.id)) correctIds.add(row.id);
     return NextResponse.json({
       isCorrect: correct,
       grade,
@@ -356,6 +457,8 @@ export async function POST(request: Request) {
       due: next.due,
       stability: next.stability,
       leech: next.leech,
+      cardType: nextCardType,
+      sessionComplete: isDailySessionComplete(dueIds.filter(id => id !== row.id), failedIds, correctIds),
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);

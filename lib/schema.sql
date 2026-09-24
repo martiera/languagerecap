@@ -32,6 +32,9 @@ ALTER TABLE profiles ADD COLUMN IF NOT EXISTS active_source_language_code TEXT N
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS srs_new_cards_per_day INTEGER NOT NULL DEFAULT 15;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS srs_max_reviews_per_day INTEGER NOT NULL DEFAULT 150;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS srs_diacritics_sensitive BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS srs_typo_tolerance INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS srs_require_article_gender BOOLEAN NOT NULL DEFAULT TRUE;
 CREATE TABLE IF NOT EXISTS lessons (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL, language_code TEXT NOT NULL,
   title TEXT NOT NULL, raw_notes TEXT NOT NULL, short_story TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -111,7 +114,7 @@ CREATE INDEX IF NOT EXISTS user_lexemes_due_idx
   ON user_lexemes(user_id, next_review_at);
 
 ALTER TABLE user_lexemes
-  ADD COLUMN IF NOT EXISTS srs_card_type TEXT NOT NULL DEFAULT 'vocabulary',
+  ADD COLUMN IF NOT EXISTS srs_card_type TEXT NOT NULL DEFAULT 'recognition',
   ADD COLUMN IF NOT EXISTS srs_difficulty DOUBLE PRECISION NOT NULL DEFAULT 5,
   ADD COLUMN IF NOT EXISTS srs_stability_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS srs_state TEXT NOT NULL DEFAULT 'new',
@@ -121,7 +124,10 @@ ALTER TABLE user_lexemes
   ADD COLUMN IF NOT EXISTS srs_reps INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS srs_lapses INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS srs_leech BOOLEAN NOT NULL DEFAULT FALSE,
-  ADD COLUMN IF NOT EXISTS srs_algorithm_version TEXT NOT NULL DEFAULT 'legacy-v1';
+  ADD COLUMN IF NOT EXISTS srs_algorithm_version TEXT NOT NULL DEFAULT 'legacy-v1',
+  ADD COLUMN IF NOT EXISTS srs_recognition_successes INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS srs_production_unlocked BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS srs_cloze_unlocked BOOLEAN NOT NULL DEFAULT FALSE;
 
 DO $$
 BEGIN
@@ -130,7 +136,7 @@ BEGIN
   ) THEN
     ALTER TABLE user_lexemes
       ADD CONSTRAINT user_lexemes_srs_card_type_check
-        CHECK (srs_card_type IN ('vocabulary'));
+        CHECK (srs_card_type IN ('recognition', 'production', 'cloze'));
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'user_lexemes_srs_state_check'
@@ -165,7 +171,7 @@ CREATE TABLE IF NOT EXISTS vocabulary_review_log (
   card_id UUID NOT NULL REFERENCES user_lexemes(id) ON DELETE CASCADE,
   word_id UUID NOT NULL REFERENCES language_lexemes(id) ON DELETE CASCADE,
   reviewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  card_type TEXT NOT NULL DEFAULT 'vocabulary',
+  card_type TEXT NOT NULL DEFAULT 'recognition',
   user_answer TEXT,
   correct BOOLEAN NOT NULL,
   response_time_ms INTEGER,
@@ -175,7 +181,22 @@ CREATE TABLE IF NOT EXISTS vocabulary_review_log (
   interval_before_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   interval_after_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   algorithm_version TEXT NOT NULL,
-  CONSTRAINT vocabulary_review_log_card_type_check CHECK (card_type IN ('vocabulary')),
+  due_before TIMESTAMPTZ,
+  due_after TIMESTAMPTZ,
+  difficulty_before DOUBLE PRECISION,
+  difficulty_after DOUBLE PRECISION,
+  learning_step_before INTEGER,
+  learning_step_after INTEGER,
+  reps_before INTEGER,
+  reps_after INTEGER,
+  lapses_before INTEGER,
+  lapses_after INTEGER,
+  leech_before BOOLEAN,
+  leech_after BOOLEAN,
+  algorithm TEXT NOT NULL DEFAULT 'ladder',
+  applied_fuzz_ratio DOUBLE PRECISION,
+  answer_source TEXT NOT NULL DEFAULT 'typed',
+  CONSTRAINT vocabulary_review_log_card_type_check CHECK (card_type IN ('recognition', 'production', 'cloze')),
   CONSTRAINT vocabulary_review_log_grade_check CHECK (grade IN ('again', 'hard', 'good', 'easy', 'manual', 'migration')),
   CONSTRAINT vocabulary_review_log_response_time_check CHECK (response_time_ms IS NULL OR response_time_ms >= 0),
   CONSTRAINT vocabulary_review_log_interval_check CHECK (interval_before_days >= 0 AND interval_after_days >= 0)

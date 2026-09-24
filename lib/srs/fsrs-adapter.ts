@@ -17,7 +17,7 @@ export function scheduleCardWithFsrs(
   config: SrsConfig,
 ): VocabularyCardState {
   const scheduler = fsrs({
-    enable_fuzz: config.fuzzRatio > 0,
+    enable_fuzz: false,
     learning_steps: config.learningStepsMinutes.slice(1).map(minutes => `${minutes}m` as `${number}m`),
     relearning_steps: config.learningStepsMinutes.slice(1).map(minutes => `${minutes}m` as `${number}m`),
   });
@@ -25,7 +25,7 @@ export function scheduleCardWithFsrs(
     due: card.due,
     stability: card.stability,
     difficulty: card.state === 'new' ? 0 : card.difficulty,
-    elapsed_days: 0,
+    elapsed_days: card.lastReview ? Math.max(0, (now.getTime() - card.lastReview.getTime()) / 86_400_000) : 0,
     scheduled_days: card.stability,
     learning_steps: card.learningStep,
     reps: card.reps,
@@ -35,6 +35,7 @@ export function scheduleCardWithFsrs(
   }, now, gradeRatings[grade]);
   const nextCard = result.card;
   const state = stateNames[nextCard.state] || 'review';
+  const lapses = Math.max(nextCard.lapses, card.lapses + (grade === 'again' ? 1 : 0));
   return {
     ...card,
     difficulty: nextCard.difficulty,
@@ -43,8 +44,8 @@ export function scheduleCardWithFsrs(
     due: nextCard.due,
     lastReview: nextCard.last_review || now,
     reps: nextCard.reps,
-    lapses: nextCard.lapses,
-    leech: nextCard.lapses >= config.leechThreshold,
+    lapses,
+    leech: lapses >= config.leechThreshold,
     learningStep: nextCard.learning_steps,
   };
 }
