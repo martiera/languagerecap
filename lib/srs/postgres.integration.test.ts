@@ -175,6 +175,7 @@ test('failed cards can circulate until a correct session retry', { skip: !enable
   try {
     const first = await review(seed, {
       userAnswer: 'wrong answer',
+      sessionRetry: false,
       sessionStartedAt,
       sessionDueIds: [seed.cardId],
       sessionFailedIds: [],

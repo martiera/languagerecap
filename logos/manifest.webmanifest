@@ -1,0 +1,13 @@
+{
+  "name": "LanguageRecap",
+  "short_name": "Recap",
+  "start_url": "/learn",
+  "display": "standalone",
+  "background_color": "#2E2A94",
+  "theme_color": "#2E2A94",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
