@@ -13,3 +13,11 @@ test('answer checking can require matching article and gender', () => {
   assert.equal(checkAnswer('die Haus', 'das Haus', options), false);
   assert.equal(checkAnswer('das Haus', 'das Haus', options), true);
 });
+
+test('answer checking ignores punctuation and accepts slash-separated translations', () => {
+  const options = { diacriticsSensitive: true, typoTolerance: 0, requireArticleGender: false };
+  assert.equal(checkAnswer('conoscere?', 'conoscere', options), true);
+  assert.equal(checkAnswer('pazīt', 'pazīt/zināt', options), true);
+  assert.equal(checkAnswer('zināt.', 'pazīt / zināt', options), true);
+  assert.equal(checkAnswer('sapere', 'pazīt/zināt', options), false);
+});

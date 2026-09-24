@@ -169,6 +169,45 @@ test('concurrent reviews of one card cannot bypass due scheduling', { skip: !ena
   }
 });
 
+test('failed cards can circulate until a correct session retry', { skip: !enabled }, async () => {
+  const seed = await seedCard();
+  const sessionStartedAt = new Date(Date.now() - 1_000).toISOString();
+  try {
+    const first = await review(seed, {
+      userAnswer: 'wrong answer',
+      sessionStartedAt,
+      sessionDueIds: [seed.cardId],
+      sessionFailedIds: [],
+      sessionCorrectIds: [],
+    });
+    assert.equal(first.status, 200);
+    assert.equal((await first.json()).sessionComplete, false);
+
+    const repeatedFailure = await review(seed, {
+      userAnswer: 'still wrong',
+      sessionRetry: true,
+      sessionStartedAt,
+      sessionDueIds: [seed.cardId],
+      sessionFailedIds: [seed.cardId],
+      sessionCorrectIds: [],
+    });
+    assert.equal(repeatedFailure.status, 200);
+    assert.equal((await repeatedFailure.json()).sessionComplete, false);
+
+    const correctRetry = await review(seed, {
+      sessionRetry: true,
+      sessionStartedAt,
+      sessionDueIds: [seed.cardId, seed.cardId],
+      sessionFailedIds: [seed.cardId, seed.cardId],
+      sessionCorrectIds: [],
+    });
+    assert.equal(correctRetry.status, 200);
+    assert.equal((await correctRetry.json()).sessionComplete, true);
+  } finally {
+    await cleanup(seed.userId);
+  }
+});
+
 test('learning card due in ten minutes is returned and accepted by learn-ahead', { skip: !enabled }, async () => {
   const seed = await seedCard();
   try {

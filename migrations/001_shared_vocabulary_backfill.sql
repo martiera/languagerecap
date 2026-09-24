@@ -15,11 +15,12 @@ INSERT INTO language_lexeme_senses (
   lexeme_id, source_language_code, translation, source
 )
 SELECT DISTINCT ON (l.id, LOWER(BTRIM(w.translation)))
-  l.id, 'en', w.translation, 'legacy_words'
+  l.id, COALESCE(p.native_language_code, 'en'), w.translation, 'legacy_words'
 FROM words w
 JOIN language_lexemes l
   ON l.language_code = w.language_code
  AND l.normalized_target_text = LOWER(BTRIM(w.target_text))
+LEFT JOIN profiles p ON p.user_id = w.user_id
 WHERE NULLIF(BTRIM(w.translation), '') IS NOT NULL
 ORDER BY l.id, LOWER(BTRIM(w.translation)), w.created_at, w.id
 ON CONFLICT (lexeme_id, source_language_code, normalized_translation) DO NOTHING;
@@ -31,9 +32,10 @@ FROM words w
 JOIN language_lexemes l
   ON l.language_code = w.language_code
  AND l.normalized_target_text = LOWER(BTRIM(w.target_text))
+LEFT JOIN profiles p ON p.user_id = w.user_id
 LEFT JOIN language_lexeme_senses s
   ON s.lexeme_id = l.id
- AND s.source_language_code = 'en'
+ AND s.source_language_code = COALESCE(p.native_language_code, 'en')
  AND s.normalized_translation = LOWER(BTRIM(w.translation))
 GROUP BY w.user_id, l.id, s.id
 ON CONFLICT (user_id, lexeme_id) DO UPDATE
@@ -47,9 +49,10 @@ FROM words w
 JOIN language_lexemes l
   ON l.language_code = w.language_code
  AND l.normalized_target_text = LOWER(BTRIM(w.target_text))
+LEFT JOIN profiles p ON p.user_id = w.user_id
 LEFT JOIN language_lexeme_senses s
   ON s.lexeme_id = l.id
- AND s.source_language_code = 'en'
+ AND s.source_language_code = COALESCE(p.native_language_code, 'en')
  AND s.normalized_translation = LOWER(BTRIM(w.translation))
 ON CONFLICT (lesson_id, lexeme_id) DO UPDATE
 SET sense_id = COALESCE(lesson_lexemes.sense_id, EXCLUDED.sense_id);

@@ -262,6 +262,8 @@ export async function POST(request: Request) {
       responseTimeMs,
       grade: requestedGrade,
       override,
+      sessionRetry,
+      sessionStartedAt,
       sessionDueIds,
       sessionFailedIds,
       sessionCorrectIds,
@@ -285,11 +287,19 @@ export async function POST(request: Request) {
     if (override !== undefined && override !== true) {
       return NextResponse.json({ error: 'Invalid override.' }, { status: 400 });
     }
+    if (sessionRetry !== undefined && sessionRetry !== true) {
+      return NextResponse.json({ error: 'Invalid session retry.' }, { status: 400 });
+    }
+    const sessionStarted = typeof sessionStartedAt === 'string' ? new Date(sessionStartedAt) : null;
+    if (sessionStartedAt !== undefined && (!sessionStarted || Number.isNaN(sessionStarted.getTime()))) {
+      return NextResponse.json({ error: 'Invalid session start time.' }, { status: 400 });
+    }
     if (explicitGrade !== undefined && override !== true) {
       return NextResponse.json({ error: 'A manual grade requires an explicit override.' }, { status: 400 });
     }
 
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [user.id]);
     const current = await client.query(
       `SELECT
          ul.id,
@@ -352,7 +362,6 @@ export async function POST(request: Request) {
       maxReviewsPerDay: Number(profile.rows[0]?.maxReviewsPerDay || SRS_LIMITS.defaultReviewsPerDay),
       learnAheadMinutes: clampLearnAheadMinutes(defaultSrsConfig.learnAheadMinutes),
     };
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${user.id}:${new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date())}`]);
     const daily = await client.query(
       `SELECT
          COUNT(*) FILTER (
@@ -372,12 +381,32 @@ export async function POST(request: Request) {
     const newToday = Number(daily.rows[0]?.new_today || 0);
     const cardIsNew = row.srsState === 'new';
     const now = new Date();
+    const failedSessionIds = Array.isArray(sessionFailedIds)
+      ? sessionFailedIds.filter((value): value is string => typeof value === 'string')
+      : [];
+    const correctSessionIds = Array.isArray(sessionCorrectIds)
+      ? sessionCorrectIds.filter((value): value is string => typeof value === 'string')
+      : [];
+    const hasFailedReviewInSession = sessionRetry === true && sessionStarted
+      ? Boolean((await client.query(
+        `SELECT EXISTS (
+           SELECT 1
+           FROM vocabulary_review_log
+           WHERE user_id=$1 AND card_id=$2 AND correct=FALSE AND reviewed_at >= $3
+         ) AS "hasFailedReview"`,
+        [user.id, row.id, sessionStarted],
+      )).rows[0]?.hasFailedReview)
+      : false;
+    const isSessionRetry = sessionRetry === true
+      && failedSessionIds.includes(row.id)
+      && !correctSessionIds.includes(row.id)
+      && hasFailedReviewInSession;
     const learnAheadDue = isLearnAheadCard({
       srsState: row.srsState as SrsState,
       srsDueAt: row.srsDueAt,
       srsDifficulty: Number(row.srsDifficulty),
     }, now, config);
-    if (!cardIsNew && new Date(row.srsDueAt).getTime() > now.getTime() && !learnAheadDue) {
+    if (!cardIsNew && new Date(row.srsDueAt).getTime() > now.getTime() && !learnAheadDue && !isSessionRetry) {
       await client.query('ROLLBACK');
       return NextResponse.json({ error: 'This card is not due yet.' }, { status: 409 });
     }
@@ -507,8 +536,12 @@ export async function POST(request: Request) {
       ],
     );
     await client.query('COMMIT');
-    const dueIds = Array.isArray(sessionDueIds) ? sessionDueIds.filter((value): value is string => typeof value === 'string') : [];
-    const failedIds = Array.isArray(sessionFailedIds) ? sessionFailedIds.filter((value): value is string => typeof value === 'string') : [];
+    const dueIds = Array.from(new Set(Array.isArray(sessionDueIds)
+      ? sessionDueIds.filter((value): value is string => typeof value === 'string')
+      : []));
+    const failedIds = Array.from(new Set(Array.isArray(sessionFailedIds)
+      ? sessionFailedIds.filter((value): value is string => typeof value === 'string')
+      : []));
     const correctIds = new Set(Array.isArray(sessionCorrectIds) ? sessionCorrectIds.filter((value): value is string => typeof value === 'string') : []);
     if (!correct && !failedIds.includes(row.id)) failedIds.push(row.id);
     if (correct && failedIds.includes(row.id)) correctIds.add(row.id);
