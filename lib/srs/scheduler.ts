@@ -20,6 +20,7 @@ export type SrsConfig = {
   algorithm: SrsAlgorithm;
   learningStepsMinutes: readonly [number, number, number];
   longTermIntervalsDays: readonly number[];
+  lapseRatio: number;
   lapseMinRatio: number;
   lapseMaxRatio: number;
   fuzzRatio: number;
@@ -45,6 +46,7 @@ export const defaultSrsConfig: SrsConfig = {
   algorithm: 'ladder',
   learningStepsMinutes: [0, 10, 180],
   longTermIntervalsDays: [1, 3, 7, 16, 35, 75, 150],
+  lapseRatio: 0.4,
   lapseMinRatio: 0.3,
   lapseMaxRatio: 0.5,
   fuzzRatio: 0.05,
@@ -127,16 +129,18 @@ export type ScheduleMetadata = {
 };
 
 function graduate(card: VocabularyCardState, now: Date, grade: SrsGrade, config: SrsConfig): ScheduleMetadata {
-  const firstInterval = config.longTermIntervalsDays[0];
+  const baseInterval = card.baseInterval > 0
+    ? card.baseInterval
+    : config.longTermIntervalsDays[0];
   const stability = fuzzInterval(
-    firstInterval * (grade === 'easy' ? config.easyIntervalMultiplier : grade === 'hard' ? config.hardIntervalMultiplier : 1),
+    baseInterval * (grade === 'easy' ? config.easyIntervalMultiplier : grade === 'hard' ? config.hardIntervalMultiplier : 1),
     config,
   );
   const next = {
     ...card,
     difficulty: nextDifficulty(card, grade, config),
     stability,
-    baseInterval: firstInterval,
+    baseInterval,
     state: 'review' as const,
     due: addDays(now, stability),
     lastReview: now,
@@ -144,14 +148,13 @@ function graduate(card: VocabularyCardState, now: Date, grade: SrsGrade, config:
     leech: card.lapses >= config.leechThreshold,
     learningStep: 0,
   };
-  return { card: next, appliedFuzzRatio: stability / (firstInterval * (grade === 'easy' ? config.easyIntervalMultiplier : grade === 'hard' ? config.hardIntervalMultiplier : 1)) - 1 };
+  return { card: next, appliedFuzzRatio: stability / (baseInterval * (grade === 'easy' ? config.easyIntervalMultiplier : grade === 'hard' ? config.hardIntervalMultiplier : 1)) - 1 };
 }
 
 export function scheduleCardWithMetadata({ card, grade, now, config }: ScheduleInput): ScheduleMetadata {
   if (grade === 'again') {
     const lapses = card.lapses + 1;
-    const lapseRatio = config.lapseMinRatio
-      + clamp(config.random(), 0, 1) * (config.lapseMaxRatio - config.lapseMinRatio);
+    const lapseRatio = clamp(config.lapseRatio, config.lapseMinRatio, config.lapseMaxRatio);
     const baseInterval = card.state === 'review'
       ? Math.max(1, card.baseInterval * lapseRatio)
       : card.baseInterval;
