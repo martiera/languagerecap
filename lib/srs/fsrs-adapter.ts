@@ -17,7 +17,9 @@ export function scheduleCardWithFsrs(
   config: SrsConfig,
 ): VocabularyCardState {
   const scheduler = fsrs({
+    // FSRS owns its lapse interval; config.lapseRatio applies to the ladder only.
     enable_fuzz: false,
+    maximum_interval: config.maxIntervalDays,
     learning_steps: config.learningStepsMinutes.slice(1).map(minutes => `${minutes}m` as `${number}m`),
     relearning_steps: config.learningStepsMinutes.slice(1).map(minutes => `${minutes}m` as `${number}m`),
   });
@@ -34,6 +36,7 @@ export function scheduleCardWithFsrs(
     last_review: card.lastReview ?? undefined,
   }, now, gradeRatings[grade]);
   const nextCard = result.card;
+  const maximumDue = new Date(now.getTime() + config.maxIntervalDays * 86_400_000);
   const state = stateNames[nextCard.state] || 'review';
   const lapses = Math.max(nextCard.lapses, card.lapses + (grade === 'again' ? 1 : 0));
   return {
@@ -42,7 +45,7 @@ export function scheduleCardWithFsrs(
     stability: nextCard.stability,
     baseInterval: nextCard.stability,
     state,
-    due: nextCard.due,
+    due: nextCard.due > maximumDue ? maximumDue : nextCard.due,
     lastReview: nextCard.last_review || now,
     reps: nextCard.reps,
     lapses,
