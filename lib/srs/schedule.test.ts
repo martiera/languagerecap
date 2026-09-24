@@ -9,6 +9,7 @@ function card(overrides: Partial<VocabularyCardState> = {}): VocabularyCardState
     cardType: 'recognition',
     difficulty: 5,
     stability: 0,
+    baseInterval: 0,
     state: 'new',
     due: now,
     lastReview: null,
@@ -22,10 +23,40 @@ function card(overrides: Partial<VocabularyCardState> = {}): VocabularyCardState
 
 test('production selector uses ladder and continues beyond the final rung', () => {
   const config = { ...defaultSrsConfig, algorithm: 'ladder' as const, random: () => 0.5 };
-  const next = scheduleVocabularyCard(card({ state: 'review', stability: 150 }), 'good', now, config);
+  const next = scheduleVocabularyCard(card({ state: 'review', stability: 150, baseInterval: 150 }), 'good', now, config);
   assert.equal(next.card.stability, 300);
-  const capped = scheduleVocabularyCard(card({ state: 'review', stability: 300 }), 'good', now, config);
+  const capped = scheduleVocabularyCard(card({ state: 'review', stability: 300, baseInterval: 300 }), 'good', now, config);
   assert.equal(capped.card.stability, 365);
+});
+
+test('seeded ladder scheduling reaches the cap monotonically across 500 cards', () => {
+  let seed = 0x12345678;
+  const random = () => {
+    seed = (1664525 * seed + 1013904223) >>> 0;
+    return seed / 0x1_0000_0000;
+  };
+  const config = { ...defaultSrsConfig, algorithm: 'ladder' as const, random };
+  const expectedBaseIntervals = [0, 0, 1, 3, 7, 16, 35, 75, 150, 300, 365];
+
+  for (let cardNumber = 0; cardNumber < 500; cardNumber += 1) {
+    let current = card();
+    let reviewTime = now;
+    let previousBase = 0;
+    for (let review = 0; review < expectedBaseIntervals.length; review += 1) {
+      const scheduled = scheduleVocabularyCard(current, 'good', reviewTime, config);
+      current = scheduled.card;
+      assert.equal(current.baseInterval, expectedBaseIntervals[review]);
+      assert.ok(current.baseInterval >= previousBase);
+      if (scheduled.appliedFuzzRatio !== null) {
+        assert.ok(Math.abs(scheduled.appliedFuzzRatio) <= config.fuzzRatio);
+        assert.ok(current.stability >= current.baseInterval * (1 - config.fuzzRatio));
+        assert.ok(current.stability <= current.baseInterval * (1 + config.fuzzRatio));
+      }
+      previousBase = current.baseInterval;
+      reviewTime = current.due;
+    }
+    assert.equal(current.baseInterval, config.maxIntervalDays);
+  }
 });
 
 test('production selector uses FSRS with real elapsed time and no application fuzz claim', () => {
@@ -33,6 +64,7 @@ test('production selector uses FSRS with real elapsed time and no application fu
   const next = scheduleVocabularyCard(card({
     state: 'review',
     stability: 10,
+    baseInterval: 10,
     due: new Date('2026-09-20T09:00:00.000Z'),
     lastReview: new Date('2026-09-20T09:00:00.000Z'),
     reps: 4,
@@ -56,7 +88,7 @@ for (const algorithm of ['ladder', 'fsrs'] as const) {
 
   test(`${algorithm} production path handles lapse, leech, and learned scheduling`, () => {
     const config = { ...defaultSrsConfig, algorithm, random: Math.random };
-    let current = card({ state: 'review', stability: 35, reps: 10 });
+    let current = card({ state: 'review', stability: 35, baseInterval: 35, reps: 10 });
     current = scheduleVocabularyCard(current, 'again', now, config).card;
     assert.ok(current.lapses >= 1);
     for (let index = current.lapses; index < config.leechThreshold; index += 1) {

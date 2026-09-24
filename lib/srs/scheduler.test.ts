@@ -10,6 +10,7 @@ function card(overrides: Partial<VocabularyCardState> = {}): VocabularyCardState
     cardType: 'recognition',
     difficulty: 5,
     stability: 0,
+    baseInterval: 0,
     state: 'new',
     due: now,
     lastReview: null,
@@ -46,7 +47,7 @@ test('a learning failure returns to step one immediately', () => {
 });
 
 test('a review lapse returns to relearning and keeps a non-zero fraction of the interval', () => {
-  const review = card({ state: 'review', stability: 35, due: now, learningStep: 0 });
+  const review = card({ state: 'review', stability: 35, baseInterval: 35, due: now, learningStep: 0 });
   const lapsed = scheduleCard({ card: review, grade: 'again', now, config });
   assert.equal(lapsed.state, 'relearning');
   assert.equal(lapsed.stability, 14);
@@ -54,25 +55,25 @@ test('a review lapse returns to relearning and keeps a non-zero fraction of the 
 });
 
 test('successful review follows the configured long-term ladder', () => {
-  const next = scheduleCard({ card: card({ state: 'review', stability: 1 }), grade: 'good', now, config });
+  const next = scheduleCard({ card: card({ state: 'review', stability: 1, baseInterval: 1 }), grade: 'good', now, config });
   assert.equal(next.stability, 3);
 });
 
 test('fuzzed intervals still advance beyond the current ladder rung', () => {
   const lowFuzz = { ...config, random: () => 0 };
-  const next = scheduleCard({ card: card({ state: 'review', stability: 34.4 }), grade: 'good', now, config: lowFuzz });
+  const next = scheduleCard({ card: card({ state: 'review', stability: 34.4, baseInterval: 35 }), grade: 'good', now, config: lowFuzz });
   assert.equal(next.stability, 71.25);
 });
 
 test('fuzz stays within the configured bounds', () => {
-  const low = scheduleCard({ card: card({ state: 'review', stability: 1 }), grade: 'good', now, config: { ...config, random: () => 0 } });
-  const high = scheduleCard({ card: card({ state: 'review', stability: 1 }), grade: 'good', now, config: { ...config, random: () => 1 } });
+  const low = scheduleCard({ card: card({ state: 'review', stability: 1, baseInterval: 1 }), grade: 'good', now, config: { ...config, random: () => 0 } });
+  const high = scheduleCard({ card: card({ state: 'review', stability: 1, baseInterval: 1 }), grade: 'good', now, config: { ...config, random: () => 1 } });
   assert.ok(Math.abs(low.stability - 2.85) < 1e-12);
   assert.ok(Math.abs(high.stability - 3.15) < 1e-12);
 });
 
 test('leech is flagged at the configured failure threshold', () => {
-  const leech = scheduleCard({ card: card({ lapses: 7 }), grade: 'again', now, config });
+  const leech = scheduleCard({ card: card({ lapses: 7, baseInterval: 1 }), grade: 'again', now, config });
   assert.equal(leech.leech, true);
 });
 

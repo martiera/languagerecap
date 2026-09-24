@@ -9,6 +9,7 @@ test('FSRS adapter preserves the scheduler card-state interface', () => {
     cardType: 'recognition',
     difficulty: 5,
     stability: 0,
+    baseInterval: 0,
     state: 'new',
     due: now,
     lastReview: null,
