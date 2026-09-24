@@ -5,6 +5,9 @@ export const SRS_LIMITS = {
   maxNewCardsPerDay: 30,
   minReviewsPerDay: 1,
   maxReviewsPerDay: 1000,
+  defaultLearnAheadMinutes: 20,
+  minLearnAheadMinutes: 0,
+  maxLearnAheadMinutes: 60,
 } as const;
 
 export function isValidTimezone(value: unknown): value is string {
@@ -15,4 +18,11 @@ export function isValidTimezone(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+export function clampLearnAheadMinutes(value: number) {
+  return Math.min(
+    Math.max(value, SRS_LIMITS.minLearnAheadMinutes),
+    SRS_LIMITS.maxLearnAheadMinutes,
+  );
 }

@@ -4,10 +4,10 @@ import { pool } from '@/lib/db';
 import { requireUser } from '@/lib/auth';
 import { isRegularItalianVerb } from '@/lib/italian-conjugation';
 import { supportsLanguage } from '@/lib/languages';
-import { SRS_LIMITS, isValidTimezone } from '@/lib/srs/config';
+import { clampLearnAheadMinutes, SRS_LIMITS, isValidTimezone } from '@/lib/srs/config';
 import { checkAnswer } from '@/lib/srs/answer';
 import { defaultSrsConfig, inferGrade, type SrsGrade, type SrsState, type VocabularyCardState } from '@/lib/srs/scheduler';
-import { isDailySessionComplete, isLessonRecapComplete, selectStudyQueue } from '@/lib/srs/queue';
+import { isDailySessionComplete, isLessonRecapComplete, isLearnAheadCard, selectStudyQueue } from '@/lib/srs/queue';
 import { scheduleVocabularyCard } from '@/lib/srs/schedule';
 
 export const dynamic = 'force-dynamic';
@@ -87,6 +87,7 @@ export async function GET(request: Request) {
       ...defaultSrsConfig,
       maxNewCardsPerDay: Number(profile.rows[0]?.maxNewCardsPerDay || SRS_LIMITS.defaultNewCardsPerDay),
       maxReviewsPerDay: Number(profile.rows[0]?.maxReviewsPerDay || SRS_LIMITS.defaultReviewsPerDay),
+      learnAheadMinutes: clampLearnAheadMinutes(defaultSrsConfig.learnAheadMinutes),
     };
     const [daily, queue, allWords] = await Promise.all([
       pool.query(
@@ -105,7 +106,8 @@ export async function GET(request: Request) {
         [user.id, timezone],
       ),
       pool.query(
-        `SELECT
+        `WITH candidates AS (
+         SELECT
            ul.id,
            l.target_text AS "targetText",
            s.translation,
@@ -155,19 +157,35 @@ export async function GET(request: Request) {
                AND selected_lesson.lexeme_id=l.id
                AND selected_lesson_row.user_id=$1
            ))
-           AND (
-             (ul.srs_state IN ('learning', 'relearning', 'review') AND ul.srs_due_at<=NOW())
-             OR ul.srs_state='new'
-           )
+         ),
+         due_status AS (
+           SELECT EXISTS (
+             SELECT 1
+             FROM candidates
+             WHERE "srsState"='new'
+                OR ("srsState" IN ('learning', 'relearning', 'review') AND "srsDueAt"<=NOW())
+           ) AS has_due
+         )
+         SELECT candidates.*
+         FROM candidates CROSS JOIN due_status
+         WHERE "srsState"='new'
+            OR ("srsState" IN ('learning', 'relearning', 'review') AND "srsDueAt"<=NOW())
+            OR (
+              $6 > 0
+              AND NOT due_status.has_due
+              AND "srsState" IN ('learning', 'relearning')
+              AND "srsDueAt">NOW()
+              AND "srsDueAt"<=NOW() + ($6 * INTERVAL '1 minute')
+            )
          ORDER BY
-           CASE WHEN ul.srs_state='new' THEN 1 ELSE 0 END,
-           ul.srs_due_at ASC,
-           ul.srs_difficulty DESC
+           CASE WHEN "srsState"='new' THEN 1 ELSE 0 END,
+           "srsDueAt" ASC,
+           "srsDifficulty" DESC
          LIMIT $4`,
-        [user.id, targetLanguage, sourceLanguage, config.maxReviewsPerDay + config.maxNewCardsPerDay, lessonId],
+        [user.id, targetLanguage, sourceLanguage, config.maxReviewsPerDay + config.maxNewCardsPerDay, lessonId, config.learnAheadMinutes],
       ),
       pool.query(
-        `SELECT s.translation, ul.srs_state AS "srsState"
+        `SELECT s.translation, ul.srs_state AS "srsState", ul.srs_due_at AS "srsDueAt"
          FROM user_lexemes ul
          JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
          JOIN language_lexemes l ON l.id=ul.lexeme_id
@@ -187,6 +205,10 @@ export async function GET(request: Request) {
     const newToday = Number(daily.rows[0]?.newToday || 0);
     const bounded = selectStudyQueue(queue.rows, { reviewsToday, newToday }, config);
     const newCount = bounded.filter(row => row.srsState === 'new').length;
+    const nextDueAt = allWords.rows
+      .map(row => new Date(row.srsDueAt as string | Date))
+      .filter(date => !Number.isNaN(date.getTime()))
+      .sort((left, right) => left.getTime() - right.getTime())[0]?.toISOString() || null;
 
     const distractors = allWords.rows.map(row => row.translation);
     const shuffledWords = shuffle(bounded);
@@ -201,6 +223,8 @@ export async function GET(request: Request) {
       words,
       sourceLanguage,
       targetLanguage,
+      timezone,
+      nextDueAt,
       dueToday: bounded.filter(word => word.srsState !== 'new').length,
       newAvailable: Math.max(0, Math.min(
         Number(queue.rows.filter(row => row.srsState === 'new').length) - newCount,
@@ -326,6 +350,7 @@ export async function POST(request: Request) {
       ...defaultSrsConfig,
       maxNewCardsPerDay: Number(profile.rows[0]?.maxNewCardsPerDay || SRS_LIMITS.defaultNewCardsPerDay),
       maxReviewsPerDay: Number(profile.rows[0]?.maxReviewsPerDay || SRS_LIMITS.defaultReviewsPerDay),
+      learnAheadMinutes: clampLearnAheadMinutes(defaultSrsConfig.learnAheadMinutes),
     };
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${user.id}:${new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date())}`]);
     const daily = await client.query(
@@ -347,7 +372,12 @@ export async function POST(request: Request) {
     const newToday = Number(daily.rows[0]?.new_today || 0);
     const cardIsNew = row.srsState === 'new';
     const now = new Date();
-    if (!cardIsNew && new Date(row.srsDueAt).getTime() > now.getTime()) {
+    const learnAheadDue = isLearnAheadCard({
+      srsState: row.srsState as SrsState,
+      srsDueAt: row.srsDueAt,
+      srsDifficulty: Number(row.srsDifficulty),
+    }, now, config);
+    if (!cardIsNew && new Date(row.srsDueAt).getTime() > now.getTime() && !learnAheadDue) {
       await client.query('ROLLBACK');
       return NextResponse.json({ error: 'This card is not due yet.' }, { status: 409 });
     }

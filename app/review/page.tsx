@@ -41,6 +41,9 @@ export default function Review() {
   const [failedCardIds, setFailedCardIds] = useState<string[]>([]);
   const [correctCardIds, setCorrectCardIds] = useState<string[]>([]);
   const [sessionComplete, setSessionComplete] = useState(false);
+  const [nextDueAt, setNextDueAt] = useState<number | null>(null);
+  const [reviewTimezone, setReviewTimezone] = useState('UTC');
+  const [refreshKey, setRefreshKey] = useState(0);
   const word = words[index];
   const source = languages.find(item => item.code === sourceLanguage);
 
@@ -64,6 +67,8 @@ export default function Review() {
     setLoading(true);
     fetch(`/api/words/review?sourceLanguage=${sourceLanguage}&targetLanguage=${targetLanguage}`).then(response => response.json()).then(data => {
       setWords(data.words || []);
+      setNextDueAt(data.nextDueAt ? new Date(data.nextDueAt).getTime() : null);
+      setReviewTimezone(data.timezone || 'UTC');
       setIndex(0);
       setFeedback(null);
       setFailedCardIds([]);
@@ -71,7 +76,16 @@ export default function Review() {
       setSessionComplete(false);
       setStartedAt(Date.now());
     }).finally(() => setLoading(false));
-  }, [sourceLanguage, targetLanguage, ready]);
+  }, [sourceLanguage, targetLanguage, ready, refreshKey]);
+
+  useEffect(() => {
+    if (!ready || words.length || nextDueAt === null) return;
+    const timer = window.setTimeout(
+      () => setRefreshKey(value => value + 1),
+      Math.max(0, nextDueAt - Date.now()) + 50,
+    );
+    return () => window.clearTimeout(timer);
+  }, [nextDueAt, ready, words.length]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -103,7 +117,10 @@ export default function Review() {
     const response = await fetch(`/api/words/review/reset?sourceLanguage=${sourceLanguage}&targetLanguage=${targetLanguage}`, { method: 'POST' });
     if (response.ok) {
       const refreshed = await fetch(`/api/words/review?sourceLanguage=${sourceLanguage}&targetLanguage=${targetLanguage}`);
-      setWords((await refreshed.json()).words || []);
+      const refreshedData = await refreshed.json();
+      setWords(refreshedData.words || []);
+      setNextDueAt(refreshedData.nextDueAt ? new Date(refreshedData.nextDueAt).getTime() : null);
+      setReviewTimezone(refreshedData.timezone || 'UTC');
       setIndex(0);
       setFeedback(null);
       setAnswer('');
@@ -147,5 +164,10 @@ export default function Review() {
   }
 
   const formsAvailable = languages.find(item => item.code === targetLanguage)?.conjugationReview;
-  return <main className="shell grid-paper min-h-screen"><div className="mx-auto max-w-4xl px-3 py-3 sm:px-5 sm:py-6 md:px-10 md:py-9"><header className="flex flex-wrap items-center justify-between gap-2 border-b border-[#173c3b22] pb-3 sm:gap-3 sm:pb-6"><Link href="/learn" className="flex items-center gap-2"><span className="text-xl sm:text-2xl">◒</span><span className="serif hidden text-2xl font-bold sm:inline">LanguageRecap</span></Link><div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">{formsAvailable && <Link href="/review/forms" className="rounded-md border bg-[#fffaf1] px-2 py-1.5 text-xs font-bold sm:px-3 sm:py-2 sm:text-sm">Forms</Link>}<button onClick={toggleMute} className="rounded-md border bg-[#fffaf1] px-2 py-1.5 text-xs font-bold sm:px-3 sm:py-2 sm:text-sm">{muted ? '🔇' : '🔊'}</button><button onClick={restart} disabled={resetting} className="rounded-md border border-[#e56f50] px-2 py-1.5 text-xs font-bold text-[#e56f50] sm:px-3 sm:py-2 sm:text-sm">{resetting ? '...' : 'Restart'}</button></div></header><div className="mx-auto max-w-xl py-5 sm:py-12"><Link href="/learn" className="text-xs font-bold text-[#6f7e76] sm:text-sm">← Dashboard</Link><div className="mt-4 flex items-end justify-between sm:mt-8"><div><span className="pill px-2 py-1 text-[10px] sm:px-3 sm:py-2 sm:text-xs">Recap · {pairLabel({ sourceLanguage, targetLanguage, words: 0 })}</span><h1 className="serif mt-2 text-3xl font-bold sm:mt-4 sm:text-5xl">Keep going.</h1></div>{word && <span className="text-xs font-bold text-[#6f7e76] sm:text-sm">{Math.min(index + 1, words.length)} / {words.length}</span>}</div>{loading ? <p className="mt-10 text-sm text-[#6f7e76]">Loading...</p> : !pairs.length ? <section className="panel mt-5 p-6 text-center sm:mt-10 sm:p-10"><h2 className="serif text-2xl font-bold sm:text-3xl">No recap dictionaries yet.</h2><p className="mt-3 text-sm text-[#6f7e76]">Parse and save a lesson first.</p></section> : !word ? <section className="panel mt-5 p-6 text-center sm:mt-10 sm:p-10"><h2 className="serif text-2xl font-bold sm:text-3xl">{sessionComplete ? 'Session complete.' : 'You&apos;re all caught up.'}</h2><p className="mt-3 text-sm text-[#6f7e76]">{sessionComplete ? 'Every failed card received a correct retry.' : 'Use Restart to practice again.'}</p></section> : <section className="panel mt-5 p-4 sm:mt-10 sm:p-7 md:p-10"><div className="flex justify-between text-[10px] font-bold uppercase tracking-[.12em] text-[#6f7e76] sm:text-xs sm:tracking-[.16em]"><span>{word.cardType === 'recognition' ? 'Choose translation' : `Type translation in ${source?.name || sourceLanguage}`}</span><span>Level {word.masteryLevel}</span></div><div className="py-8 text-center sm:py-14"><p className="serif text-4xl font-bold sm:text-5xl"><Split text={word.targetText} highlight={word.type.toLowerCase() === 'verb'} /></p><p className="mt-2 text-sm text-[#6f7e76] sm:mt-3">{word.type}</p></div>{word.cardType === 'recognition' ? <div className="grid gap-2 sm:gap-3">{word.options.map((option, i) => <button key={option} onClick={() => submit(option)} className="rounded-md border bg-[#f5f1e9] px-3 py-3 text-left text-sm font-bold sm:px-4 sm:py-4">{String.fromCharCode(65 + i)} <span className="ml-2 sm:ml-3">{option}</span></button>)}</div> : <div><input autoFocus value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => event.key === 'Enter' && submit(answer)} placeholder={`Type the ${source?.name || sourceLanguage} translation...`} className="w-full rounded-md border bg-[#f5f1e9] px-3 py-3 text-sm sm:px-4 sm:py-4" /><button onClick={() => submit(answer)} className="mt-2 w-full rounded-md bg-[#173c3b] px-3 py-3 text-sm font-bold text-white sm:mt-3 sm:px-4 sm:py-4">Check</button></div>  }{feedback && <div className={`mt-4 rounded-md border p-3 text-sm ${feedback.correct ? 'border-[#5b8555] text-[#5b8555]' : 'border-[#e56f50] text-[#e56f50]'}`}><p className="font-bold">{feedback.correct ? 'Correct. Keep the rhythm.' : 'Not quite.'}</p><p className="mt-1">Answer: <strong>{feedback.answer}</strong></p>{feedback.context && <p className="mt-1 text-[#6f7e76]">Context: {feedback.context}</p>}</div>}</section>}</div></div></main>;
+  const nextDueLabel = nextDueAt === null ? null : new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: reviewTimezone,
+  }).format(new Date(nextDueAt));
+  return <main className="shell grid-paper min-h-screen"><div className="mx-auto max-w-4xl px-3 py-3 sm:px-5 sm:py-6 md:px-10 md:py-9"><header className="flex flex-wrap items-center justify-between gap-2 border-b border-[#173c3b22] pb-3 sm:gap-3 sm:pb-6"><Link href="/learn" className="flex items-center gap-2"><span className="text-xl sm:text-2xl">◒</span><span className="serif hidden text-2xl font-bold sm:inline">LanguageRecap</span></Link><div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">{formsAvailable && <Link href="/review/forms" className="rounded-md border bg-[#fffaf1] px-2 py-1.5 text-xs font-bold sm:px-3 sm:py-2 sm:text-sm">Forms</Link>}<button onClick={toggleMute} className="rounded-md border bg-[#fffaf1] px-2 py-1.5 text-xs font-bold sm:px-3 sm:py-2 sm:text-sm">{muted ? '🔇' : '🔊'}</button><button onClick={restart} disabled={resetting} className="rounded-md border border-[#e56f50] px-2 py-1.5 text-xs font-bold text-[#e56f50] sm:px-3 sm:py-2 sm:text-sm">{resetting ? '...' : 'Restart'}</button></div></header><div className="mx-auto max-w-xl py-5 sm:py-12"><Link href="/learn" className="text-xs font-bold text-[#6f7e76] sm:text-sm">← Dashboard</Link><div className="mt-4 flex items-end justify-between sm:mt-8"><div><span className="pill px-2 py-1 text-[10px] sm:px-3 sm:py-2 sm:text-xs">Recap · {pairLabel({ sourceLanguage, targetLanguage, words: 0 })}</span><h1 className="serif mt-2 text-3xl font-bold sm:mt-4 sm:text-5xl">Keep going.</h1></div>{word && <span className="text-xs font-bold text-[#6f7e76] sm:text-sm">{Math.min(index + 1, words.length)} / {words.length}</span>}</div>{loading ? <p className="mt-10 text-sm text-[#6f7e76]">Loading...</p> : !pairs.length ? <section className="panel mt-5 p-6 text-center sm:mt-10 sm:p-10"><h2 className="serif text-2xl font-bold sm:text-3xl">No recap dictionaries yet.</h2><p className="mt-3 text-sm text-[#6f7e76]">Parse and save a lesson first.</p></section> : !word ? <section className="panel mt-5 p-6 text-center sm:mt-10 sm:p-10"><h2 className="serif text-2xl font-bold sm:text-3xl">{sessionComplete ? 'Session complete.' : 'You&apos;re all caught up.'}</h2><p className="mt-3 text-sm text-[#6f7e76]">{sessionComplete ? 'Every failed card received a correct retry.' : nextDueLabel ? `Next review at ${nextDueLabel}` : 'You&apos;re all caught up.'}</p></section> : <section className="panel mt-5 p-4 sm:mt-10 sm:p-7 md:p-10"><div className="flex justify-between text-[10px] font-bold uppercase tracking-[.12em] text-[#6f7e76] sm:text-xs sm:tracking-[.16em]"><span>{word.cardType === 'recognition' ? 'Choose translation' : `Type translation in ${source?.name || sourceLanguage}`}</span><span>Level {word.masteryLevel}</span></div><div className="py-8 text-center sm:py-14"><p className="serif text-4xl font-bold sm:text-5xl"><Split text={word.targetText} highlight={word.type.toLowerCase() === 'verb'} /></p><p className="mt-2 text-sm text-[#6f7e76] sm:mt-3">{word.type}</p></div>{word.cardType === 'recognition' ? <div className="grid gap-2 sm:gap-3">{word.options.map((option, i) => <button key={option} onClick={() => submit(option)} className="rounded-md border bg-[#f5f1e9] px-3 py-3 text-left text-sm font-bold sm:px-4 sm:py-4">{String.fromCharCode(65 + i)} <span className="ml-2 sm:ml-3">{option}</span></button>)}</div> : <div><input autoFocus value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => event.key === 'Enter' && submit(answer)} placeholder={`Type the ${source?.name || sourceLanguage} translation...`} className="w-full rounded-md border bg-[#f5f1e9] px-3 py-3 text-sm sm:px-4 sm:py-4" /><button onClick={() => submit(answer)} className="mt-2 w-full rounded-md bg-[#173c3b] px-3 py-3 text-sm font-bold text-white sm:mt-3 sm:px-4 sm:py-4">Check</button></div>  }{feedback && <div className={`mt-4 rounded-md border p-3 text-sm ${feedback.correct ? 'border-[#5b8555] text-[#5b8555]' : 'border-[#e56f50] text-[#e56f50]'}`}><p className="font-bold">{feedback.correct ? 'Correct. Keep the rhythm.' : 'Not quite.'}</p><p className="mt-1">Answer: <strong>{feedback.answer}</strong></p>{feedback.context && <p className="mt-1 text-[#6f7e76]">Context: {feedback.context}</p>}</div>}</section>}</div></div></main>;
 }
