@@ -40,6 +40,7 @@ export function scheduleCardWithFsrs(
     ...card,
     difficulty: nextCard.difficulty,
     stability: nextCard.stability,
+    baseInterval: nextCard.stability,
     state,
     due: nextCard.due,
     lastReview: nextCard.last_review || now,

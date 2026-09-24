@@ -117,6 +117,7 @@ ALTER TABLE user_lexemes
   ADD COLUMN IF NOT EXISTS srs_card_type TEXT NOT NULL DEFAULT 'recognition',
   ADD COLUMN IF NOT EXISTS srs_difficulty DOUBLE PRECISION NOT NULL DEFAULT 5,
   ADD COLUMN IF NOT EXISTS srs_stability_days DOUBLE PRECISION NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS srs_base_interval_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS srs_state TEXT NOT NULL DEFAULT 'new',
   ADD COLUMN IF NOT EXISTS srs_learning_step INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS srs_due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -180,6 +181,8 @@ CREATE TABLE IF NOT EXISTS vocabulary_review_log (
   state_after TEXT NOT NULL,
   interval_before_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   interval_after_days DOUBLE PRECISION NOT NULL DEFAULT 0,
+  base_interval_before_days DOUBLE PRECISION NOT NULL DEFAULT 0,
+  base_interval_after_days DOUBLE PRECISION NOT NULL DEFAULT 0,
   algorithm_version TEXT NOT NULL,
   due_before TIMESTAMPTZ,
   due_after TIMESTAMPTZ,
@@ -199,7 +202,8 @@ CREATE TABLE IF NOT EXISTS vocabulary_review_log (
   CONSTRAINT vocabulary_review_log_card_type_check CHECK (card_type IN ('recognition', 'production', 'cloze')),
   CONSTRAINT vocabulary_review_log_grade_check CHECK (grade IN ('again', 'hard', 'good', 'easy', 'manual', 'migration')),
   CONSTRAINT vocabulary_review_log_response_time_check CHECK (response_time_ms IS NULL OR response_time_ms >= 0),
-  CONSTRAINT vocabulary_review_log_interval_check CHECK (interval_before_days >= 0 AND interval_after_days >= 0)
+  CONSTRAINT vocabulary_review_log_interval_check CHECK (interval_before_days >= 0 AND interval_after_days >= 0),
+  CONSTRAINT vocabulary_review_log_base_interval_check CHECK (base_interval_before_days >= 0 AND base_interval_after_days >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS vocabulary_review_log_card_idx

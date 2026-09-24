@@ -6,6 +6,7 @@ export type VocabularyCardState = {
   cardType: 'recognition' | 'production' | 'cloze';
   difficulty: number;
   stability: number;
+  baseInterval: number;
   state: SrsState;
   due: Date;
   lastReview: Date | null;
@@ -102,10 +103,10 @@ function nextLongTermIndex(stability: number, config: SrsConfig, skip: number) {
 
 function ladderInterval(card: VocabularyCardState, config: SrsConfig, skip: number) {
   const last = config.longTermIntervalsDays[config.longTermIntervalsDays.length - 1];
-  if (card.stability >= last) {
-    return Math.min(config.maxIntervalDays, Math.max(last, card.stability * 2 ** skip));
+  if (card.baseInterval >= last) {
+    return Math.min(config.maxIntervalDays, Math.max(last, card.baseInterval * 2 ** skip));
   }
-  const index = nextLongTermIndex(card.stability, config, skip);
+  const index = nextLongTermIndex(card.baseInterval, config, skip);
   return config.longTermIntervalsDays[index];
 }
 
@@ -135,6 +136,7 @@ function graduate(card: VocabularyCardState, now: Date, grade: SrsGrade, config:
     ...card,
     difficulty: nextDifficulty(card, grade, config),
     stability,
+    baseInterval: firstInterval,
     state: 'review' as const,
     due: addDays(now, stability),
     lastReview: now,
@@ -150,13 +152,17 @@ export function scheduleCardWithMetadata({ card, grade, now, config }: ScheduleI
     const lapses = card.lapses + 1;
     const lapseRatio = config.lapseMinRatio
       + clamp(config.random(), 0, 1) * (config.lapseMaxRatio - config.lapseMinRatio);
+    const baseInterval = card.state === 'review'
+      ? Math.max(1, card.baseInterval * lapseRatio)
+      : card.baseInterval;
     const stability = card.state === 'review'
-      ? Math.max(Number.EPSILON, card.stability * lapseRatio)
+      ? baseInterval
       : card.stability;
     return { card: {
       ...card,
       difficulty: nextDifficulty(card, grade, config),
       stability,
+      baseInterval,
       state: card.state === 'review' ? 'relearning' : 'learning',
       due: now,
       lastReview: now,
@@ -188,7 +194,7 @@ export function scheduleCardWithMetadata({ card, grade, now, config }: ScheduleI
   const skip = grade === 'easy' ? 2 : 1;
   const baseInterval = ladderInterval(card, config, skip);
   const rawInterval = grade === 'hard'
-    ? Math.max(card.stability, baseInterval * config.hardIntervalMultiplier)
+    ? Math.max(card.baseInterval, baseInterval * config.hardIntervalMultiplier)
     : grade === 'easy'
       ? baseInterval * config.easyIntervalMultiplier
       : baseInterval;
@@ -197,6 +203,7 @@ export function scheduleCardWithMetadata({ card, grade, now, config }: ScheduleI
     ...card,
     difficulty: nextDifficulty(card, grade, config),
     stability,
+    baseInterval,
     state: 'review',
     due: addDays(now, stability),
     lastReview: now,
