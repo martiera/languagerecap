@@ -287,7 +287,7 @@ export async function POST(request: Request) {
     if (override !== undefined && override !== true) {
       return NextResponse.json({ error: 'Invalid override.' }, { status: 400 });
     }
-    if (sessionRetry !== undefined && typeof sessionRetry !== 'boolean') {
+    if (sessionRetry !== undefined && sessionRetry !== true) {
       return NextResponse.json({ error: 'Invalid session retry.' }, { status: 400 });
     }
     const sessionStarted = typeof sessionStartedAt === 'string' ? new Date(sessionStartedAt) : null;
