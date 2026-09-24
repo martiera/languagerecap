@@ -61,6 +61,10 @@ export async function GET(request: Request) {
     const language = params.get('language') || 'it';
     const targetLanguage = params.get('targetLanguage') || language;
     const sourceLanguage = params.get('sourceLanguage') || 'en';
+    const lessonId = params.get('lessonId');
+    if (lessonId && !/^[0-9a-f-]{36}$/i.test(lessonId)) {
+      return NextResponse.json({ error: 'Invalid lesson.' }, { status: 400 });
+    }
     if (!supportsLanguage(targetLanguage) || !supportsLanguage(sourceLanguage) || targetLanguage === sourceLanguage) {
       return NextResponse.json({ error: 'Choose two different supported languages.' }, { status: 400 });
     }
@@ -144,6 +148,13 @@ export async function GET(request: Request) {
          WHERE ul.user_id=$1
            AND l.language_code=$2
            AND s.source_language_code=$3
+           AND ($5::uuid IS NULL OR EXISTS (
+             SELECT 1 FROM lesson_lexemes selected_lesson
+             JOIN lessons selected_lesson_row ON selected_lesson_row.id=selected_lesson.lesson_id
+             WHERE selected_lesson.lesson_id=$5::uuid
+               AND selected_lesson.lexeme_id=l.id
+               AND selected_lesson_row.user_id=$1
+           ))
            AND (
              (ul.srs_state IN ('learning', 'relearning', 'review') AND ul.srs_due_at<=NOW())
              OR ul.srs_state='new'
@@ -153,15 +164,22 @@ export async function GET(request: Request) {
            ul.srs_due_at ASC,
            ul.srs_difficulty DESC
          LIMIT $4`,
-        [user.id, targetLanguage, sourceLanguage, config.maxReviewsPerDay + config.maxNewCardsPerDay],
+        [user.id, targetLanguage, sourceLanguage, config.maxReviewsPerDay + config.maxNewCardsPerDay, lessonId],
       ),
       pool.query(
-        `SELECT s.translation, ul.srs_state AS "srsState", ul.srs_stability_days AS "srsStability"
+        `SELECT s.translation, ul.srs_state AS "srsState"
          FROM user_lexemes ul
          JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
          JOIN language_lexemes l ON l.id=ul.lexeme_id
-         WHERE ul.user_id=$1 AND l.language_code=$2 AND s.source_language_code=$3`,
-        [user.id, targetLanguage, sourceLanguage],
+         WHERE ul.user_id=$1 AND l.language_code=$2 AND s.source_language_code=$3
+           AND ($4::uuid IS NULL OR EXISTS (
+             SELECT 1 FROM lesson_lexemes selected_lesson
+             JOIN lessons selected_lesson_row ON selected_lesson_row.id=selected_lesson.lesson_id
+             WHERE selected_lesson.lesson_id=$4::uuid
+               AND selected_lesson.lexeme_id=l.id
+               AND selected_lesson_row.user_id=$1
+           ))`,
+        [user.id, targetLanguage, sourceLanguage, lessonId],
       ),
     ]);
 
@@ -189,8 +207,7 @@ export async function GET(request: Request) {
         Math.max(0, config.maxNewCardsPerDay - newToday),
       )),
       recapComplete: isLessonRecapComplete(
-        allWords.rows.map(row => ({ srsState: row.srsState as SrsState, srsStability: Number(row.srsStability) })),
-        config.learnedThresholdDays,
+        allWords.rows.map(row => ({ srsState: row.srsState as SrsState })),
       ),
       reviewsToday,
       newToday,
@@ -329,6 +346,11 @@ export async function POST(request: Request) {
     const reviewsToday = Number(daily.rows[0]?.reviews_today || 0);
     const newToday = Number(daily.rows[0]?.new_today || 0);
     const cardIsNew = row.srsState === 'new';
+    const now = new Date();
+    if (!cardIsNew && new Date(row.srsDueAt).getTime() > now.getTime()) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ error: 'This card is not due yet.' }, { status: 409 });
+    }
     if ((cardIsNew && newToday >= config.maxNewCardsPerDay) || (!cardIsNew && reviewsToday >= config.maxReviewsPerDay)) {
       await client.query('ROLLBACK');
       return NextResponse.json({ error: 'Today’s review limit has been reached.' }, { status: 429 });
@@ -349,7 +371,6 @@ export async function POST(request: Request) {
     const grade: SrsGrade = explicitGrade || inferGrade(Boolean(actualCorrect), responseTimeMs ?? null, config);
     const correct = explicitGrade ? explicitGrade !== 'again' : Boolean(actualCorrect);
     const card = rowToCard(row);
-    const now = new Date();
     const scheduled = scheduleVocabularyCard(card, grade, now, config);
     const next = scheduled.card;
     if (user.isDemo) {
@@ -359,7 +380,7 @@ export async function POST(request: Request) {
 
     await client.query(
       `INSERT INTO vocabulary_review_log (
-         user_id, card_id, word_id, card_type, user_answer, correct,
+         user_id, card_id, word_id, reviewed_at, card_type, user_answer, correct,
          response_time_ms, grade, state_before, state_after,
          interval_before_days, interval_after_days, algorithm_version,
          base_interval_before_days, base_interval_after_days,
@@ -367,11 +388,12 @@ export async function POST(request: Request) {
          learning_step_before, learning_step_after, reps_before, reps_after,
          lapses_before, lapses_after, leech_before, leech_after,
          algorithm, applied_fuzz_ratio, answer_source
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)`,
       [
         user.id,
         row.id,
         row.wordId,
+        now,
         card.cardType,
         typeof userAnswer === 'string' ? userAnswer : null,
         correct,
@@ -419,8 +441,8 @@ export async function POST(request: Request) {
            srs_stability_days=$5,
            srs_base_interval_days=$6,
            srs_state=$7,
-           srs_due_at=$2,
-           srs_last_review_at=$3,
+           srs_due_at=$19::timestamptz,
+           srs_last_review_at=$20::timestamptz,
            srs_learning_step=$8,
            srs_reps=$9,
            srs_lapses=$10,
@@ -450,6 +472,8 @@ export async function POST(request: Request) {
         clozeUnlocked,
         row.id,
         user.id,
+        next.due,
+        next.lastReview,
       ],
     );
     await client.query('COMMIT');
