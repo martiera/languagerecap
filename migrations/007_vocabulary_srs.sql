@@ -104,6 +104,9 @@ SELECT
   ul.srs_stability_days,
   'legacy-v1'
 FROM user_lexemes ul
+-- Legacy imports may contain orphaned user_lexemes; only valid users can
+-- satisfy the review-log foreign key.
+JOIN app_users existing_user ON existing_user.id = ul.user_id
 WHERE NOT EXISTS (
   SELECT 1
   FROM vocabulary_review_log log
