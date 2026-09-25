@@ -47,12 +47,18 @@ export default function LearnDashboard() {
   }, [router]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const saved = Number(params.get('lessonSaved'));
-    const skipped = Number(params.get('lessonSkipped'));
-    if (!Number.isInteger(saved) || saved < 0 || !Number.isInteger(skipped) || skipped < 0) return;
-    setSaveMessage(`${saved} new words saved. ${skipped} existing words skipped.`);
-    window.history.replaceState({}, document.title, '/learn');
+    const rawMessage = sessionStorage.getItem('languagerecap-lesson-save');
+    if (!rawMessage) return;
+    sessionStorage.removeItem('languagerecap-lesson-save');
+    try {
+      const message = JSON.parse(rawMessage) as { saved?: unknown; skipped?: unknown };
+      const saved = Number(message.saved);
+      const skipped = Number(message.skipped);
+      if (!Number.isInteger(saved) || saved < 0 || !Number.isInteger(skipped) || skipped < 0) return;
+      setSaveMessage(`${saved} new words saved. ${skipped} existing words skipped.`);
+    } catch {
+      return;
+    }
   }, []);
 
   useEffect(() => {
