@@ -60,6 +60,8 @@ export async function POST(request: Request) {
            srs_stability_days=0,
            srs_state='new',
            srs_card_type='recognition',
+           mode_tier=0,
+           introduced_at=NULL,
            srs_learning_step=0,
            srs_due_at=NOW(),
            srs_last_review_at=NULL,

@@ -7,7 +7,7 @@ import { languages } from '@/lib/languages';
 import { Brand } from '@/components/Brand';
 
 type Form = { tense: string; person: string; form: string; translation: string };
-type Word = { id: string; targetText: string; translation: string; type: string; masteryLevel: number; cardType: 'recognition' | 'production' | 'cloze'; itemKind: 'word' | 'conjugation'; options: string[]; helperForms: Form[]; isIrregular: boolean; contextSentence: string };
+type Word = { id: string; targetText: string; translation: string; type: string; masteryLevel: number; reps: number; cardType: 'recognition' | 'production' | 'cloze'; itemKind: 'word' | 'conjugation'; options: string[]; helperForms: Form[]; isIrregular: boolean; contextSentence: string };
 type Pair = { sourceLanguage: string; targetLanguage: string; words: number };
 type Feedback = { correct: boolean; answer: string; context: string };
 
@@ -157,6 +157,7 @@ export default function Review() {
         sourceLanguage,
         targetLanguage,
         userAnswer: value,
+        expectedReps: reviewedWord.reps,
         responseTimeMs: Math.max(0, Date.now() - startedAt),
         sessionRetry: isSessionRetry,
         sessionStartedAt: new Date(sessionStartedAt).toISOString(),
@@ -167,6 +168,12 @@ export default function Review() {
     });
     const result = await response.json();
     if (!response.ok) {
+      if (response.status === 409 && result.code === 'STALE_REVIEW') {
+        setFeedback(null);
+        setAnswer('');
+        setRefreshKey(current => current + 1);
+        return;
+      }
       setFeedback({ correct: false, answer: result.error || word.translation, context: word.contextSentence });
       return;
     }

@@ -9,6 +9,7 @@ import { checkAnswer } from '@/lib/srs/answer';
 import { defaultSrsConfig, inferGrade, type SrsGrade, type SrsState, type VocabularyCardState } from '@/lib/srs/scheduler';
 import { isDailySessionComplete, isLessonRecapComplete, isLearnAheadCard, selectStudyQueue } from '@/lib/srs/queue';
 import { scheduleVocabularyCard } from '@/lib/srs/schedule';
+import { hasFullLocalCalendarDayPassed, maxModeTier, normalizedModeTier } from '@/lib/srs/mode-tier';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,8 +40,9 @@ function options(correct: string, distractors: string[], position: number) {
 }
 
 function rowToCard(row: Record<string, unknown>): VocabularyCardState {
+  const modeTier = normalizedModeTier(row.modeTier);
   return {
-    cardType: row.cardType as VocabularyCardState['cardType'],
+    cardType: modeTier >= maxModeTier ? 'production' : 'recognition',
     difficulty: Number(row.srsDifficulty),
     stability: Number(row.srsStability),
     baseInterval: Number(row.srsBaseInterval),
@@ -114,6 +116,7 @@ export async function GET(request: Request) {
            l.grammatical_type AS type,
            ul.mastery_level AS "masteryLevel",
            ul.srs_card_type AS "cardType",
+           COALESCE(ul.mode_tier, 0) AS "modeTier",
            ul.srs_difficulty AS "srsDifficulty",
            ul.srs_stability_days AS "srsStability",
            ul.srs_base_interval_days AS "srsBaseInterval",
@@ -216,7 +219,10 @@ export async function GET(request: Request) {
     const answerPositions = positions(shuffledWords.length);
     const words = shuffledWords.map((word, index) => ({
       ...word,
-      masteryLevel: word.cardType === 'recognition' ? 0 : 1,
+      reps: Number(word.srsReps),
+      modeTier: normalizedModeTier(word.modeTier),
+      cardType: normalizedModeTier(word.modeTier) >= maxModeTier ? 'production' : 'recognition',
+      masteryLevel: normalizedModeTier(word.modeTier),
       helperForms: targetLanguage === 'it' && !word.isIrregular && isRegularItalianVerb(word.targetText) ? [] : word.helperForms,
       options: options(word.translation, distractors, answerPositions[index]),
     }));
@@ -259,6 +265,7 @@ export async function POST(request: Request) {
       sourceLanguage,
       targetLanguage,
       userAnswer,
+      expectedReps,
       isCorrect: legacyCorrect,
       responseTimeMs,
       grade: requestedGrade,
@@ -271,6 +278,9 @@ export async function POST(request: Request) {
     } = body;
     if (typeof wordId !== 'string' || itemKind !== 'word') {
       return NextResponse.json({ error: 'Invalid vocabulary review response.' }, { status: 400 });
+    }
+    if (!Number.isInteger(expectedReps) || expectedReps < 0) {
+      return NextResponse.json({ error: 'A valid expectedReps value is required.' }, { status: 400 });
     }
     if (sourceLanguage !== undefined && (typeof sourceLanguage !== 'string' || !supportsLanguage(sourceLanguage))) {
       return NextResponse.json({ error: 'Invalid source language.' }, { status: 400 });
@@ -308,6 +318,8 @@ export async function POST(request: Request) {
          ul.selected_sense_id AS "senseId",
          ul.mastery_level AS "masteryLevel",
          ul.srs_card_type AS "cardType",
+         ul.mode_tier AS "modeTier",
+         ul.introduced_at AS "introducedAt",
          ul.srs_difficulty AS "srsDifficulty",
          ul.srs_stability_days AS "srsStability",
          ul.srs_base_interval_days AS "srsBaseInterval",
@@ -339,6 +351,14 @@ export async function POST(request: Request) {
     if ((targetLanguage && row.targetLanguage !== targetLanguage) || (sourceLanguage && row.sourceLanguage !== sourceLanguage)) {
       await client.query('ROLLBACK');
       return NextResponse.json({ error: 'Review item does not belong to the selected language pair.' }, { status: 409 });
+    }
+    if (expectedReps !== Number(row.srsReps)) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({
+        error: 'This review is stale. Refresh the review queue.',
+        code: 'STALE_REVIEW',
+        refresh: true,
+      }, { status: 409 });
     }
 
     const profile = await client.query(
@@ -433,6 +453,21 @@ export async function POST(request: Request) {
     const card = rowToCard(row);
     const scheduled = scheduleVocabularyCard(card, grade, now, config);
     const next = scheduled.card;
+    const modeTierBefore = normalizedModeTier(row.modeTier);
+    const introducedAt = row.introducedAt ? new Date(row.introducedAt as string | Date) : null;
+    const firstReviewIntroducedAt = row.srsState === 'new' && !introducedAt ? now : introducedAt;
+    let modeTierAfter = modeTierBefore;
+    if (correct && modeTierBefore < maxModeTier) {
+      const dayGate = modeTierBefore < 2
+        || (
+          hasFullLocalCalendarDayPassed(firstReviewIntroducedAt, now, timezone)
+          && (!row.srsLastReviewAt
+            || hasFullLocalCalendarDayPassed(row.srsLastReviewAt as string | Date, now, timezone))
+        );
+      if (dayGate) modeTierAfter += 1;
+    } else if (!correct && modeTierBefore >= 3) {
+      modeTierAfter = 2;
+    }
     if (user.isDemo) {
       await client.query('ROLLBACK');
       return NextResponse.json({ isCorrect: correct, grade });
@@ -440,7 +475,7 @@ export async function POST(request: Request) {
 
     await client.query(
       `INSERT INTO vocabulary_review_log (
-         user_id, card_id, word_id, reviewed_at, card_type, user_answer, correct,
+         user_id, card_id, word_id, reviewed_at, card_type, mode_tier_before, mode_tier_after, user_answer, correct,
          response_time_ms, grade, state_before, state_after,
          interval_before_days, interval_after_days, algorithm_version,
          base_interval_before_days, base_interval_after_days,
@@ -448,13 +483,15 @@ export async function POST(request: Request) {
          learning_step_before, learning_step_after, reps_before, reps_after,
          lapses_before, lapses_after, leech_before, leech_after,
          algorithm, applied_fuzz_ratio, answer_source
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)`,
       [
         user.id,
         row.id,
         row.wordId,
         now,
         card.cardType,
+        modeTierBefore,
+        modeTierAfter,
         typeof userAnswer === 'string' ? userAnswer : null,
         correct,
         responseTimeMs ?? null,
@@ -483,13 +520,11 @@ export async function POST(request: Request) {
         typeof userAnswer === 'string' ? 'typed' : 'override',
       ],
     );
-    const recognitionSuccesses = card.cardType === 'recognition' && correct
-      ? Number(row.recognitionSuccesses || 0) + 1
-      : 0;
-    const nextCardType = card.cardType === 'recognition'
-      ? (correct ? 'production' : 'recognition')
-      : 'recognition';
-    const productionUnlocked = nextCardType === 'production';
+    const nextCardType = modeTierAfter >= maxModeTier ? 'production' : 'recognition';
+    const recognitionSuccesses = modeTierAfter < maxModeTier
+      ? Number(row.recognitionSuccesses || 0) + (correct && modeTierBefore < 2 ? 1 : 0)
+      : Number(row.recognitionSuccesses || 0);
+    const productionUnlocked = modeTierAfter >= maxModeTier;
     const clozeUnlocked = false;
     const masteryLevel = next.state === 'review' ? Math.min(5, Math.max(1, next.reps)) : 0;
     await client.query(
@@ -501,8 +536,8 @@ export async function POST(request: Request) {
            srs_stability_days=$5,
            srs_base_interval_days=$6,
            srs_state=$7,
-           srs_due_at=$19::timestamptz,
-           srs_last_review_at=$20::timestamptz,
+           srs_due_at=$21::timestamptz,
+           srs_last_review_at=$22::timestamptz,
            srs_learning_step=$8,
            srs_reps=$9,
            srs_lapses=$10,
@@ -511,8 +546,10 @@ export async function POST(request: Request) {
            srs_card_type=$13,
            srs_recognition_successes=$14,
            srs_production_unlocked=$15,
-           srs_cloze_unlocked=$16
-       WHERE id=$17 AND user_id=$18`,
+           srs_cloze_unlocked=$16,
+           mode_tier=$17,
+           introduced_at=COALESCE(introduced_at, $18)
+       WHERE id=$19 AND user_id=$20`,
       [
         masteryLevel,
         next.due,
@@ -530,6 +567,8 @@ export async function POST(request: Request) {
         recognitionSuccesses,
         productionUnlocked,
         clozeUnlocked,
+        modeTierAfter,
+        firstReviewIntroducedAt,
         row.id,
         user.id,
         next.due,
@@ -554,6 +593,7 @@ export async function POST(request: Request) {
       stability: next.stability,
       leech: next.leech,
       cardType: nextCardType,
+      modeTier: modeTierAfter,
       sessionComplete: isDailySessionComplete(dueIds.filter(id => id !== row.id), failedIds, correctIds),
     });
   } catch (error) {

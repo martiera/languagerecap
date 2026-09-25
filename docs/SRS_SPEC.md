@@ -105,6 +105,14 @@ Review-log insertion and card-state updates occur in one database transaction.
 Reviews submitted before a card is due are rejected, subject to any explicitly
 configured learn-ahead behavior.
 
+The review queue includes the card's current `srs_reps` value as a concurrency
+token. A review POST must return that value as `expectedReps`; after the card
+row is locked with `SELECT ... FOR UPDATE`, the server rejects a mismatched
+token with HTTP 409 before scheduling, tier transitions, introduction-time
+writes, lapse updates, or review-log insertion. This prevents duplicate
+submissions while preserving legitimate sequential reviews inside the
+20-minute default learn-ahead window.
+
 ## Decisions taken so far
 
 - Vocabulary SRS is separate from Forms/conjugation scheduling.
@@ -121,3 +129,46 @@ configured learn-ahead behavior.
   time zone when the queue is empty.
 - `lib/schema.sql` is a complete PostgreSQL snapshot, including objects from
   migrations 002, 005, and 006; migration files remain the upgrade path.
+
+## Mode tiers and bounded promotion
+
+Vocabulary review has two independent dimensions per card:
+
+1. The existing ladder or FSRS spacing interval governs when the card is due.
+2. A configurable `maxModeTier` currently set to `3` bounds a `modeTier`
+   value that governs the test presentation:
+   - Tier 0: multiple choice with easy, unrelated distractors.
+   - Tier 1: multiple choice with medium, same-part-of-speech distractors.
+   - Tier 2: multiple choice with hard, semantically or orthographically
+     confusable distractors.
+   - Tier 3: typed production.
+   - Tier 4: reserved for future cloze or sentence production.
+
+Correct recognition answers promote Tier 0 to Tier 1 and Tier 1 to Tier 2
+without a day gate. Promotion from Tier 2 to Tier 3 requires a correct Tier 2
+answer and at least one complete calendar day in the user's validated IANA
+time zone since the card's first-seen or introduced timestamp. A correct Tier 2
+answer on the first calendar day does not promote the card; normal interval
+scheduling still applies. Promotion from Tier 3 to Tier 4 follows the same
+correct-answer and calendar-day rule.
+
+A wrong answer at Tier 3 or Tier 4 demotes the card to Tier 2 for its next
+review or reviews and also applies the existing spacing lapse behavior. These
+are independent effects of the same answer, and the existing lapse counter
+continues to drive the leech flag at eight lapses. Re-promotion from a
+demotion requires exactly one correct Tier 2 answer on a later local calendar
+day; it must not remain at Tier 2 indefinitely. Wrong answers at Tiers 0, 1,
+and 2 do not change `modeTier` and only apply normal lapse scheduling.
+
+Distractor selection is pool-size adaptive. When the user's personal
+language-pair pool contains fewer than approximately 20 words, review uses a
+small bundled per-language distractor bank. Larger pools should use bounded
+personal-pool selection appropriate to the current tier and must not create
+unbounded result sets.
+
+`maxModeTier` is an application configuration constant, not a schema ceiling,
+so it can be raised later without another database migration. Tier 4 remains
+disabled until each vocabulary word has a reliable per-word context sentence
+and expected cloze answer. Per-word context sentences were part of the
+original lesson-parsing design, but the current data model captured only the
+lesson-level `short_story`, not a sentence associated with each word.

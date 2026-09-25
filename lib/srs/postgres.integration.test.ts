@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { pool } from '@/lib/db';
 import { createSession } from '@/lib/auth';
 import { GET, POST } from '@/app/api/words/review/route';
+import { POST as RESET } from '@/app/api/words/review/reset/route';
 import { defaultSrsConfig, type VocabularyCardState } from './scheduler';
 import { scheduleVocabularyCard } from './schedule';
 
@@ -91,6 +92,10 @@ async function seedCard(options: { newCardsPerDay?: number } = {}) {
 }
 
 async function review(seed: Awaited<ReturnType<typeof seedCard>>, body: Record<string, unknown>) {
+  const expectedReps = body.expectedReps ?? Number((await pool.query(
+    'SELECT srs_reps FROM user_lexemes WHERE id=$1',
+    [seed.cardId],
+  )).rows[0]?.srs_reps);
   return POST(new Request('http://localhost/api/words/review', {
     method: 'POST',
     headers: { cookie: seed.cookie, 'content-type': 'application/json' },
@@ -100,6 +105,7 @@ async function review(seed: Awaited<ReturnType<typeof seedCard>>, body: Record<s
       sourceLanguage: 'en',
       targetLanguage: 'de',
       userAnswer: seed.target,
+      expectedReps,
       ...body,
     }),
   }));
@@ -201,13 +207,126 @@ test('PostgreSQL daily-cap locking allows only one concurrent new-card review', 
   }
 });
 
-test('concurrent reviews of one card cannot bypass due scheduling', { skip: !enabled }, async () => {
+test('a genuine duplicate submission is rejected with 409 and only one review is logged', { skip: !enabled }, async () => {
   const concurrent = await seedCard();
   try {
-    const [one, two] = await Promise.all([review(concurrent, {}), review(concurrent, {})]);
+    await pool.query(
+      `UPDATE user_lexemes
+       SET srs_state='learning', srs_learning_step=1,
+           srs_due_at=NOW() + INTERVAL '10 minutes',
+           next_review_at=NOW() + INTERVAL '10 minutes'
+       WHERE id=$1`,
+      [concurrent.cardId],
+    );
+    const queued = await GET(new Request('http://localhost/api/words/review?sourceLanguage=en&targetLanguage=de', {
+      headers: { cookie: concurrent.cookie },
+    }));
+    const queuedCard = (await queued.json()).words.find((word: { id: string }) => word.id === concurrent.cardId);
+    const [one, two] = await Promise.all([
+      review(concurrent, { expectedReps: queuedCard.reps }),
+      review(concurrent, { expectedReps: queuedCard.reps }),
+    ]);
     assert.deepEqual([one.status, two.status].sort(), [200, 409]);
+    const logs = await pool.query('SELECT COUNT(*)::int AS count FROM vocabulary_review_log WHERE card_id=$1', [concurrent.cardId]);
+    assert.equal(logs.rows[0].count, 1);
   } finally {
     await cleanup(concurrent.userId);
+  }
+});
+
+test('two sequential legitimate learn-ahead reviews each succeed with fresh expectedReps', { skip: !enabled }, async () => {
+  const seed = await seedCard();
+  try {
+    await pool.query(
+      `UPDATE user_lexemes
+       SET srs_state='learning', srs_learning_step=0,
+           srs_due_at=NOW() + INTERVAL '10 minutes',
+           next_review_at=NOW() + INTERVAL '10 minutes'
+       WHERE id=$1`,
+      [seed.cardId],
+    );
+    const firstQueue = await GET(new Request('http://localhost/api/words/review?sourceLanguage=en&targetLanguage=de', {
+      headers: { cookie: seed.cookie },
+    }));
+    const firstBody = await firstQueue.json();
+    const firstCard = firstBody.words.find((word: { id: string }) => word.id === seed.cardId);
+    const firstGapMinutes = (new Date(firstCard?.srsDueAt).getTime() - Date.now()) / 60_000;
+    assert.ok(firstCard && firstGapMinutes > 0 && firstGapMinutes <= 20,
+      `first GET must return a learn-ahead card within 20 minutes; actual gap=${firstGapMinutes.toFixed(3)} minutes`);
+    const first = await review(seed, { expectedReps: firstCard.reps });
+    assert.equal(first.status, 200);
+
+    const secondQueue = await GET(new Request('http://localhost/api/words/review?sourceLanguage=en&targetLanguage=de', {
+      headers: { cookie: seed.cookie },
+    }));
+    const secondBody = await secondQueue.json();
+    const secondCard = secondBody.words.find((word: { id: string }) => word.id === seed.cardId);
+    const secondGapMinutes = (new Date(secondCard?.srsDueAt).getTime() - Date.now()) / 60_000;
+    assert.ok(secondCard && secondGapMinutes > 0 && secondGapMinutes <= 20,
+      `second GET must return a learn-ahead card within 20 minutes; actual gap=${secondGapMinutes.toFixed(3)} minutes`);
+    const second = await review(seed, { expectedReps: secondCard.reps });
+    assert.equal(second.status, 200);
+    const logs = await pool.query('SELECT COUNT(*)::int AS count FROM vocabulary_review_log WHERE card_id=$1', [seed.cardId]);
+    assert.equal(logs.rows[0].count, 2);
+  } finally {
+    await cleanup(seed.userId);
+  }
+});
+
+test('ten parallel submissions allow one review for learning, review, and relearning cards', { skip: !enabled }, async () => {
+  const cards = [await seedCard(), await seedCard(), await seedCard()];
+  const states = [
+    `srs_state='learning', srs_learning_step=1,
+     srs_due_at=NOW() + INTERVAL '10 minutes',
+     next_review_at=NOW() + INTERVAL '10 minutes'`,
+    `srs_state='review', srs_reps=1, srs_stability_days=1,
+     srs_due_at=NOW(), next_review_at=NOW()`,
+    `srs_state='relearning', srs_learning_step=1, srs_reps=2,
+     srs_due_at=NOW() + INTERVAL '10 minutes',
+     next_review_at=NOW() + INTERVAL '10 minutes'`,
+  ];
+  try {
+    for (let index = 0; index < cards.length; index += 1) {
+      const card = cards[index];
+      await pool.query(`UPDATE user_lexemes SET ${states[index]} WHERE id=$1`, [card.cardId]);
+      const current = await pool.query('SELECT srs_reps FROM user_lexemes WHERE id=$1', [card.cardId]);
+      const results = await Promise.all(Array.from({ length: 10 }, () => review(card, {
+        expectedReps: Number(current.rows[0].srs_reps),
+      })));
+      assert.equal(results.filter(result => result.status === 200).length, 1);
+      assert.equal(results.filter(result => result.status === 409).length, 9);
+      const logs = await pool.query('SELECT COUNT(*)::int AS count FROM vocabulary_review_log WHERE card_id=$1', [card.cardId]);
+      assert.equal(logs.rows[0].count, 1);
+    }
+  } finally {
+    for (const card of cards) await cleanup(card.userId);
+  }
+});
+
+test('retrying the exact successful request is rejected without changing review state', { skip: !enabled }, async () => {
+  const seed = await seedCard();
+  try {
+    const before = await pool.query(
+      'SELECT srs_reps, srs_lapses, mode_tier, introduced_at FROM user_lexemes WHERE id=$1',
+      [seed.cardId],
+    );
+    const expectedReps = Number(before.rows[0].srs_reps);
+    const first = await review(seed, { expectedReps });
+    assert.equal(first.status, 200);
+    const second = await review(seed, { expectedReps });
+    assert.equal(second.status, 409);
+    const after = await pool.query(
+      'SELECT srs_reps, srs_lapses, mode_tier, introduced_at FROM user_lexemes WHERE id=$1',
+      [seed.cardId],
+    );
+    assert.equal(Number(after.rows[0].srs_reps), Number(before.rows[0].srs_reps) + 1);
+    assert.equal(Number(after.rows[0].srs_lapses), Number(before.rows[0].srs_lapses));
+    assert.equal(after.rows[0].mode_tier, before.rows[0].mode_tier);
+    assert.equal(after.rows[0].introduced_at, before.rows[0].introduced_at);
+    const logs = await pool.query('SELECT COUNT(*)::int AS count FROM vocabulary_review_log WHERE card_id=$1', [seed.cardId]);
+    assert.equal(logs.rows[0].count, 1);
+  } finally {
+    await cleanup(seed.userId);
   }
 });
 
@@ -322,62 +441,191 @@ test('manual override is rejected without the flag and logged as override with i
   }
 });
 
-test('base-word review cycles from recognition to production and back', { skip: !enabled }, async () => {
+test('mode tiers promote, day-gate, demote with lapses, and re-promote', { skip: !enabled }, async () => {
   const seed = await seedCard();
   try {
-    const recognition = await review(seed, {});
-    assert.equal(recognition.status, 200);
+    let response = await review(seed, {});
+    assert.equal(response.status, 200);
     let row = await pool.query(
-      'SELECT srs_card_type, srs_production_unlocked, srs_cloze_unlocked FROM user_lexemes WHERE id=$1',
+      'SELECT mode_tier, introduced_at FROM user_lexemes WHERE id=$1',
+      [seed.cardId],
+    );
+    assert.equal(row.rows[0].mode_tier, 1);
+    assert.ok(row.rows[0].introduced_at);
+
+    await pool.query('UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1', [seed.cardId]);
+    response = await review(seed, {});
+    assert.equal(response.status, 200);
+    row = await pool.query('SELECT mode_tier FROM user_lexemes WHERE id=$1', [seed.cardId]);
+    assert.equal(row.rows[0].mode_tier, 2);
+
+    await pool.query('UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1', [seed.cardId]);
+    response = await review(seed, {});
+    assert.equal(response.status, 200);
+    row = await pool.query('SELECT mode_tier FROM user_lexemes WHERE id=$1', [seed.cardId]);
+    assert.equal(row.rows[0].mode_tier, 2);
+
+    await pool.query(
+      `UPDATE user_lexemes
+       SET mode_tier=2, srs_card_type='recognition',
+           introduced_at=NOW() - INTERVAL '2 days',
+           srs_last_review_at=NOW() - INTERVAL '2 days',
+           srs_due_at=NOW(), next_review_at=NOW()
+       WHERE id=$1`,
+      [seed.cardId],
+    );
+    response = await review(seed, {});
+    assert.equal(response.status, 200);
+    const promotedBody = await response.json();
+    assert.deepEqual(
+      { cardType: promotedBody.cardType, modeTier: promotedBody.modeTier },
+      { cardType: 'production', modeTier: 3 },
+    );
+    row = await pool.query(
+      'SELECT mode_tier, srs_card_type, srs_production_unlocked, srs_cloze_unlocked FROM user_lexemes WHERE id=$1',
       [seed.cardId],
     );
     assert.deepEqual(row.rows[0], {
+      mode_tier: 3,
       srs_card_type: 'production',
       srs_production_unlocked: true,
       srs_cloze_unlocked: false,
     });
+
     await pool.query(
-      'UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1',
+      `UPDATE user_lexemes
+       SET srs_due_at=NOW(), next_review_at=NOW()
+       WHERE id=$1`,
       [seed.cardId],
     );
-    const productionQueue = await GET(new Request('http://localhost/api/words/review?sourceLanguage=en&targetLanguage=de', {
-      headers: { cookie: seed.cookie },
-    }));
-    const productionQueueBody = await productionQueue.json();
-    const productionCard = productionQueueBody.words.find((word: { id: string }) => word.id === seed.cardId);
-    assert.equal(productionCard.cardType, 'production');
-    assert.equal(productionCard.masteryLevel, 1);
-
-    const production = await review(seed, {});
-    assert.equal(production.status, 200);
+    response = await review(seed, { userAnswer: 'wrong answer' });
+    assert.equal(response.status, 200);
     row = await pool.query(
-      'SELECT srs_card_type, srs_production_unlocked, srs_cloze_unlocked, mastery_level FROM user_lexemes WHERE id=$1',
+      `SELECT mode_tier, srs_lapses, srs_card_type,
+              (SELECT mode_tier_before FROM vocabulary_review_log WHERE card_id=$1 ORDER BY reviewed_at DESC LIMIT 1) AS mode_tier_before,
+              (SELECT mode_tier_after FROM vocabulary_review_log WHERE card_id=$1 ORDER BY reviewed_at DESC LIMIT 1) AS mode_tier_after
+       FROM user_lexemes WHERE id=$1`,
       [seed.cardId],
     );
     assert.deepEqual(row.rows[0], {
+      mode_tier: 2,
+      srs_lapses: 1,
       srs_card_type: 'recognition',
-      srs_production_unlocked: false,
-      srs_cloze_unlocked: false,
-      mastery_level: 0,
+      mode_tier_before: 3,
+      mode_tier_after: 2,
     });
 
     await pool.query(
-      'UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1',
+      `UPDATE user_lexemes
+       SET srs_due_at=NOW(), next_review_at=NOW()
+       WHERE id=$1`,
       [seed.cardId],
     );
-    await review(seed, {});
+    response = await review(seed, {});
+    assert.equal(response.status, 200);
+    row = await pool.query('SELECT mode_tier FROM user_lexemes WHERE id=$1', [seed.cardId]);
+    assert.equal(row.rows[0].mode_tier, 2);
+
     await pool.query(
-      'UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1',
+      `UPDATE user_lexemes
+       SET introduced_at=NOW() - INTERVAL '4 days',
+           srs_last_review_at=NOW() - INTERVAL '2 days',
+           srs_due_at=NOW(), next_review_at=NOW()
+       WHERE id=$1`,
       [seed.cardId],
     );
-    const failedProduction = await review(seed, { userAnswer: 'wrong answer' });
-    assert.equal(failedProduction.status, 200);
+    response = await review(seed, {});
+    assert.equal(response.status, 200);
+    row = await pool.query('SELECT mode_tier FROM user_lexemes WHERE id=$1', [seed.cardId]);
+    assert.equal(row.rows[0].mode_tier, 3);
+
+    await pool.query('UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1', [seed.cardId]);
+    response = await review(seed, {});
+    assert.equal(response.status, 200);
     row = await pool.query(
-      'SELECT srs_card_type, srs_production_unlocked, srs_cloze_unlocked FROM user_lexemes WHERE id=$1',
+      `SELECT mode_tier,
+              (SELECT mode_tier_before FROM vocabulary_review_log WHERE card_id=$1 ORDER BY reviewed_at DESC LIMIT 1) AS mode_tier_before,
+              (SELECT mode_tier_after FROM vocabulary_review_log WHERE card_id=$1 ORDER BY reviewed_at DESC LIMIT 1) AS mode_tier_after
+       FROM user_lexemes WHERE id=$1`,
       [seed.cardId],
     );
     assert.deepEqual(row.rows[0], {
+      mode_tier: 3,
+      mode_tier_before: 3,
+      mode_tier_after: 3,
+    });
+  } finally {
+    await cleanup(seed.userId);
+  }
+});
+
+test('NULL mode tier behaves identically to tier 0', { skip: !enabled }, async () => {
+  const seed = await seedCard();
+  const second = await addCardForUser(seed.userId, seed.cookie);
+  try {
+    const queue = await GET(new Request('http://localhost/api/words/review?sourceLanguage=en&targetLanguage=de', {
+      headers: { cookie: seed.cookie },
+    }));
+    assert.equal(queue.status, 200);
+    const queuedCard = (await queue.json()).words.find((word: { id: string }) => word.id === seed.cardId);
+    assert.equal(queuedCard.modeTier, 0);
+    await pool.query(
+      `UPDATE user_lexemes
+       SET mode_tier=$2, srs_due_at=NOW(), next_review_at=NOW()
+       WHERE id=$1`,
+      [second.cardId, 0],
+    );
+    const [nullTier, zeroTier] = await Promise.all([
+      review(seed, {}),
+      review(second, {}),
+    ]);
+    assert.equal(nullTier.status, 200);
+    assert.equal(zeroTier.status, 200);
+    const rows = await pool.query(
+      'SELECT mode_tier FROM user_lexemes WHERE id IN ($1,$2) ORDER BY id',
+      [seed.cardId, second.cardId],
+    );
+    assert.deepEqual(rows.rows.map(row => row.mode_tier), [1, 1]);
+  } finally {
+    await cleanup(seed.userId);
+  }
+});
+
+test('reset clears mode tier and introduction state with the legacy fields', { skip: !enabled }, async () => {
+  const seed = await seedCard();
+  try {
+    await pool.query(
+      `UPDATE user_lexemes
+       SET mode_tier=3,
+           introduced_at=NOW() - INTERVAL '3 days',
+           srs_card_type='production',
+           srs_production_unlocked=TRUE,
+           srs_cloze_unlocked=FALSE,
+           srs_lapses=7,
+           srs_leech=TRUE
+       WHERE id=$1`,
+      [seed.cardId],
+    );
+    const response = await RESET(new Request(
+      'http://localhost/api/words/review/reset?sourceLanguage=en&targetLanguage=de',
+      {
+        method: 'POST',
+        headers: { cookie: seed.cookie },
+      },
+    ));
+    assert.equal(response.status, 200);
+    const row = await pool.query(
+      `SELECT mode_tier, introduced_at, srs_card_type,
+              srs_lapses, srs_leech, srs_production_unlocked, srs_cloze_unlocked
+       FROM user_lexemes WHERE id=$1`,
+      [seed.cardId],
+    );
+    assert.deepEqual(row.rows[0], {
+      mode_tier: 0,
+      introduced_at: null,
       srs_card_type: 'recognition',
+      srs_lapses: 0,
+      srs_leech: false,
       srs_production_unlocked: false,
       srs_cloze_unlocked: false,
     });
