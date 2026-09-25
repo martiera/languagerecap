@@ -130,14 +130,6 @@ export async function GET(request: Request) {
            'word' AS "itemKind",
            l.is_irregular AS "isIrregular",
            COALESCE((
-             SELECT lesson.short_story
-             FROM lesson_lexemes lesson_word
-             JOIN lessons lesson ON lesson.id=lesson_word.lesson_id
-             WHERE lesson_word.lexeme_id=l.id AND lesson.user_id=$1
-             ORDER BY lesson.created_at DESC
-             LIMIT 1
-           ), '') AS "contextSentence",
-           COALESCE((
              SELECT json_agg(json_build_object(
                'tense', lc.tense,
                'person', lc.person,

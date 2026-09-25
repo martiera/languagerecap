@@ -95,9 +95,7 @@ export default function NewLessonPage() {
       await fetch('/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceLanguage, targetLanguage }) });
       localStorage.setItem('languagerecap-source-language', sourceLanguage);
       localStorage.setItem('languagerecap-learning-language', targetLanguage);
-      setMessage(`${data.saved} new words saved. ${data.skipped} existing words skipped.`);
-      setResult(null);
-      setNotes('');
+      router.push(`/learn?lessonSaved=${encodeURIComponent(String(data.saved))}&lessonSkipped=${encodeURIComponent(String(data.skipped))}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not save.');
     } finally {
