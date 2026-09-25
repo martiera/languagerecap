@@ -164,7 +164,9 @@ Distractor selection is pool-size adaptive. When the user's personal
 language-pair pool contains fewer than approximately 20 words, review uses a
 small bundled per-language distractor bank. Larger pools should use bounded
 personal-pool selection appropriate to the current tier and must not create
-unbounded result sets.
+unbounded result sets. The selector returns three distractors by default at
+every recognition tier; with the correct answer included, the response has up
+to four options uniformly across tiers.
 
 `maxModeTier` is an application configuration constant, not a schema ceiling,
 so it can be raised later without another database migration. Tier 4 remains

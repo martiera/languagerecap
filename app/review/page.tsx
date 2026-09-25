@@ -7,7 +7,7 @@ import { languages } from '@/lib/languages';
 import { Brand } from '@/components/Brand';
 
 type Form = { tense: string; person: string; form: string; translation: string };
-type Word = { id: string; targetText: string; translation: string; type: string; masteryLevel: number; reps: number; cardType: 'recognition' | 'production' | 'cloze'; itemKind: 'word' | 'conjugation'; options: string[]; helperForms: Form[]; isIrregular: boolean };
+type Word = { id: string; targetText: string; translation: string; type: string; masteryLevel: number; modeTier: number; reps: number; cardType: 'recognition' | 'production' | 'cloze'; itemKind: 'word' | 'conjugation'; options: string[]; helperForms: Form[]; isIrregular: boolean };
 type Pair = { sourceLanguage: string; targetLanguage: string; words: number };
 type Feedback = { correct: boolean; translation: string };
 const feedbackDurationMs = 1200;

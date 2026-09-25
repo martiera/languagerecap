@@ -10,6 +10,8 @@ import { defaultSrsConfig, inferGrade, type SrsGrade, type SrsState, type Vocabu
 import { isDailySessionComplete, isLessonRecapComplete, isLearnAheadCard, selectStudyQueue } from '@/lib/srs/queue';
 import { scheduleVocabularyCard } from '@/lib/srs/schedule';
 import { hasFullLocalCalendarDayPassed, maxModeTier, normalizedModeTier } from '@/lib/srs/mode-tier';
+import { selectDistractors } from '@/lib/srs/distractors';
+import { fetchCandidatePool } from '@/lib/srs/candidate-pool';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,23 +22,6 @@ function shuffle<T>(items: T[]) {
     [result[i], result[j]] = [result[j], result[i]];
   }
   return result;
-}
-
-function positions(length: number) {
-  if (length === 1) return [randomInt(3)];
-  const base = Array.from({ length }, (_, index) => index % 3);
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const result = shuffle(base);
-    if (result.every((value, index) => index === 0 || value !== result[index - 1])) return result;
-  }
-  return shuffle(base);
-}
-
-function options(correct: string, distractors: string[], position: number) {
-  const values = [correct, ...shuffle(distractors.filter(value => value !== correct)).slice(0, 2)];
-  const current = values.indexOf(correct);
-  if (position < values.length && current !== position) [values[current], values[position]] = [values[position], values[current]];
-  return values;
 }
 
 function rowToCard(row: Record<string, unknown>): VocabularyCardState {
@@ -111,6 +96,7 @@ export async function GET(request: Request) {
         `WITH candidates AS (
          SELECT
            ul.id,
+           l.id AS "lexemeId",
            l.target_text AS "targetText",
            s.translation,
            l.grammatical_type AS type,
@@ -180,7 +166,7 @@ export async function GET(request: Request) {
         [user.id, targetLanguage, sourceLanguage, config.maxReviewsPerDay + config.maxNewCardsPerDay, lessonId, config.learnAheadMinutes],
       ),
       pool.query(
-        `SELECT s.translation, ul.srs_state AS "srsState", ul.srs_due_at AS "srsDueAt"
+        `SELECT s.translation, l.grammatical_type AS type, ul.srs_state AS "srsState", ul.srs_due_at AS "srsDueAt"
          FROM user_lexemes ul
          JOIN language_lexeme_senses s ON s.id=ul.selected_sense_id
          JOIN language_lexemes l ON l.id=ul.lexeme_id
@@ -206,17 +192,58 @@ export async function GET(request: Request) {
       .filter(date => !Number.isNaN(date.getTime()) && date.getTime() > now)
       .sort((left, right) => left.getTime() - right.getTime())[0]?.toISOString() || null;
 
-    const distractors = allWords.rows.map(row => row.translation);
+    const fallbackLanguage = sourceLanguage === 'de' || sourceLanguage === 'lv' ? sourceLanguage : undefined;
+    const candidatePoolByPartOfSpeech = new Map<string, Awaited<ReturnType<typeof fetchCandidatePool>>>();
+    candidatePoolByPartOfSpeech.set(
+      'all',
+      bounded.length
+        ? await fetchCandidatePool(pool, {
+            userId: user.id,
+            targetLanguage,
+            sourceLanguage,
+            targetLexemeId: String(bounded[0].lexemeId),
+          })
+        : [],
+    );
+    await Promise.all(
+      [...new Set(bounded.map(word => String(word.type || '')))].map(async (partOfSpeech) => {
+        const target = bounded.find(word => String(word.type || '') === partOfSpeech);
+        if (!target || !partOfSpeech) return;
+        candidatePoolByPartOfSpeech.set(
+          partOfSpeech,
+          await fetchCandidatePool(pool, {
+            userId: user.id,
+            targetLanguage,
+            sourceLanguage,
+            partOfSpeech,
+            targetLexemeId: String(target.lexemeId),
+          }),
+        );
+      }),
+    );
     const shuffledWords = shuffle(bounded);
-    const answerPositions = positions(shuffledWords.length);
-    const words = shuffledWords.map((word, index) => ({
+    const words = shuffledWords.map((word) => ({
       ...word,
       reps: Number(word.srsReps),
       modeTier: normalizedModeTier(word.modeTier),
       cardType: normalizedModeTier(word.modeTier) >= maxModeTier ? 'production' : 'recognition',
       masteryLevel: normalizedModeTier(word.modeTier),
       helperForms: targetLanguage === 'it' && !word.isIrregular && isRegularItalianVerb(word.targetText) ? [] : word.helperForms,
-      options: options(word.translation, distractors, answerPositions[index]),
+      options: normalizedModeTier(word.modeTier) < maxModeTier
+        ? shuffle([
+            word.translation,
+            ...selectDistractors(
+              word.translation,
+              String(word.type || ''),
+              normalizedModeTier(word.modeTier) as 0 | 1 | 2,
+              candidatePoolByPartOfSpeech.get(
+                normalizedModeTier(word.modeTier) === 0 ? 'all' : String(word.type || ''),
+              ) || [],
+              3,
+              fallbackLanguage,
+            ),
+          ])
+        : [],
     }));
     return NextResponse.json({
       words,
