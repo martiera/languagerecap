@@ -205,9 +205,10 @@ export async function GET(request: Request) {
     const newToday = Number(daily.rows[0]?.newToday || 0);
     const bounded = selectStudyQueue(queue.rows, { reviewsToday, newToday }, config);
     const newCount = bounded.filter(row => row.srsState === 'new').length;
+    const now = Date.now();
     const nextDueAt = allWords.rows
       .map(row => new Date(row.srsDueAt as string | Date))
-      .filter(date => !Number.isNaN(date.getTime()))
+      .filter(date => !Number.isNaN(date.getTime()) && date.getTime() > now)
       .sort((left, right) => left.getTime() - right.getTime())[0]?.toISOString() || null;
 
     const distractors = allWords.rows.map(row => row.translation);
@@ -215,7 +216,7 @@ export async function GET(request: Request) {
     const answerPositions = positions(shuffledWords.length);
     const words = shuffledWords.map((word, index) => ({
       ...word,
-      masteryLevel: user.isDemo ? 0 : word.masteryLevel,
+      masteryLevel: word.cardType === 'recognition' ? 0 : 1,
       helperForms: targetLanguage === 'it' && !word.isIrregular && isRegularItalianVerb(word.targetText) ? [] : word.helperForms,
       options: options(word.translation, distractors, answerPositions[index]),
     }));
@@ -482,14 +483,14 @@ export async function POST(request: Request) {
         typeof userAnswer === 'string' ? 'typed' : 'override',
       ],
     );
-    const recognitionSuccesses = Number(row.recognitionSuccesses || 0) + (card.cardType === 'recognition' && correct ? 1 : 0);
-    const productionUnlocked = Boolean(row.productionUnlocked) || recognitionSuccesses > 0;
-    const clozeUnlocked = Boolean(row.clozeUnlocked) || recognitionSuccesses > 0;
-    const nextCardType = card.cardType === 'recognition' && correct
-      ? 'production'
-      : card.cardType === 'production' && correct && clozeUnlocked
-        ? 'cloze'
-        : card.cardType;
+    const recognitionSuccesses = card.cardType === 'recognition' && correct
+      ? Number(row.recognitionSuccesses || 0) + 1
+      : 0;
+    const nextCardType = card.cardType === 'recognition'
+      ? (correct ? 'production' : 'recognition')
+      : 'recognition';
+    const productionUnlocked = nextCardType === 'production';
+    const clozeUnlocked = false;
     const masteryLevel = next.state === 'review' ? Math.min(5, Math.max(1, next.reps)) : 0;
     await client.query(
       `UPDATE user_lexemes

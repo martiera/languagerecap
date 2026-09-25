@@ -75,10 +75,17 @@ the user's local day.
 
 ## Card types
 
-Cards progress from recognition to production to cloze. Production unlocks
-after the first successful recognition review, and cloze unlocks after the
-required successful production progression. Card-type unlock state is
-user-specific and does not duplicate canonical vocabulary content.
+Base-word recap alternates between two presentation levels: Level 0 is
+multiple-choice recognition and Level 1 is typed production. A recognition
+review moves the next presentation to production; the following production
+attempt, whether correct or incorrect, returns the next presentation to Level
+0 recognition. This presentation cycle is separate from SRS reps, intervals,
+and review-state scheduling.
+
+The database retains card-type and unlock columns for compatibility with
+existing data, but the base-word review path does not permanently promote a
+card to cloze. Conjugation/Form review has its own separate progression and
+level rules.
 
 ## Completion rules
 

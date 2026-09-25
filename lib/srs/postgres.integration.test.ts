@@ -322,7 +322,7 @@ test('manual override is rejected without the flag and logged as override with i
   }
 });
 
-test('recognition success unlocks production, then production unlocks cloze', { skip: !enabled }, async () => {
+test('base-word review cycles from recognition to production and back', { skip: !enabled }, async () => {
   const seed = await seedCard();
   try {
     const recognition = await review(seed, {});
@@ -334,19 +334,53 @@ test('recognition success unlocks production, then production unlocks cloze', { 
     assert.deepEqual(row.rows[0], {
       srs_card_type: 'production',
       srs_production_unlocked: true,
-      srs_cloze_unlocked: true,
+      srs_cloze_unlocked: false,
     });
     await pool.query(
       'UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1',
       [seed.cardId],
     );
+    const productionQueue = await GET(new Request('http://localhost/api/words/review?sourceLanguage=en&targetLanguage=de', {
+      headers: { cookie: seed.cookie },
+    }));
+    const productionQueueBody = await productionQueue.json();
+    const productionCard = productionQueueBody.words.find((word: { id: string }) => word.id === seed.cardId);
+    assert.equal(productionCard.cardType, 'production');
+    assert.equal(productionCard.masteryLevel, 1);
+
     const production = await review(seed, {});
     assert.equal(production.status, 200);
     row = await pool.query(
-      'SELECT srs_card_type FROM user_lexemes WHERE id=$1',
+      'SELECT srs_card_type, srs_production_unlocked, srs_cloze_unlocked, mastery_level FROM user_lexemes WHERE id=$1',
       [seed.cardId],
     );
-    assert.equal(row.rows[0].srs_card_type, 'cloze');
+    assert.deepEqual(row.rows[0], {
+      srs_card_type: 'recognition',
+      srs_production_unlocked: false,
+      srs_cloze_unlocked: false,
+      mastery_level: 0,
+    });
+
+    await pool.query(
+      'UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1',
+      [seed.cardId],
+    );
+    await review(seed, {});
+    await pool.query(
+      'UPDATE user_lexemes SET srs_due_at=NOW(), next_review_at=NOW() WHERE id=$1',
+      [seed.cardId],
+    );
+    const failedProduction = await review(seed, { userAnswer: 'wrong answer' });
+    assert.equal(failedProduction.status, 200);
+    row = await pool.query(
+      'SELECT srs_card_type, srs_production_unlocked, srs_cloze_unlocked FROM user_lexemes WHERE id=$1',
+      [seed.cardId],
+    );
+    assert.deepEqual(row.rows[0], {
+      srs_card_type: 'recognition',
+      srs_production_unlocked: false,
+      srs_cloze_unlocked: false,
+    });
   } finally {
     await cleanup(seed.userId);
   }
