@@ -9,3 +9,4 @@ coverage/
 *.log
 .deployed-image
 secrets/
+tmp/*

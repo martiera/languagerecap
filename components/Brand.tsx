@@ -16,7 +16,7 @@ export function Brand({ compact = false, className = '' }: BrandProps) {
     />
   ) : (
     <Image
-      src="/logo-horizontal.svg"
+      src="/logo-horizontal-on-paper.svg"
       alt="LanguageRecap"
       width={183}
       height={29}
