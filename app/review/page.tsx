@@ -10,7 +10,7 @@ import { Brand } from '@/components/Brand';
 type Form = { tense: string; person: string; form: string; translation: string };
 type Word = { id: string; targetText: string; translation: string; type: string; masteryLevel: number; modeTier: number; reps: number; cardType: 'recognition' | 'production' | 'cloze'; itemKind: 'word' | 'conjugation'; options: string[]; helperForms: Form[]; isIrregular: boolean };
 type Pair = { sourceLanguage: string; targetLanguage: string; words: number };
-type Feedback = { correct: boolean; translation: string };
+type Feedback = { correct: boolean; translation: string; answer: string };
 const feedbackDurationMs = 1200;
 
 function Split({ text, highlight }: { text: string; highlight: boolean }) {
@@ -37,6 +37,7 @@ export default function Review() {
   const [words, setWords] = useState<Word[]>([]);
   const [index, setIndex] = useState(0);
   const [answer, setAnswer] = useState('');
+  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
@@ -101,6 +102,7 @@ export default function Review() {
         setNextDueAt(data.nextDueAt ? new Date(data.nextDueAt).getTime() : null);
         setReviewTimezone(data.timezone || 'UTC');
         setIndex(0);
+        setSelectedAnswer(null);
         setFeedback(null);
         setStaleReviewMessage('');
         setSubmitError('');
@@ -168,6 +170,7 @@ export default function Review() {
       setNextDueAt(refreshedData.nextDueAt ? new Date(refreshedData.nextDueAt).getTime() : null);
       setReviewTimezone(refreshedData.timezone || 'UTC');
       setIndex(0);
+      setSelectedAnswer(null);
       setFeedback(null);
       setAnswer('');
       setSessionStartedAt(Date.now());
@@ -179,32 +182,53 @@ export default function Review() {
   async function submit(value: string) {
     if (!word || feedback || staleReviewMessage) return;
     const reviewedWord = word;
+    if (reviewedWord.cardType === 'recognition') {
+      setSelectedAnswer(value);
+      setSubmitError('');
+    }
     const isSessionRetry = failedCardIds.includes(word.id) && !correctCardIds.includes(word.id);
-    const response = await fetch('/api/words/review', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        wordId: word.id,
-        itemKind: word.itemKind,
-        sourceLanguage,
-        targetLanguage,
-        userAnswer: value,
-        expectedReps: reviewedWord.reps,
-        responseTimeMs: Math.max(0, Date.now() - startedAt),
-        sessionRetry: isSessionRetry,
-        sessionStartedAt: new Date(sessionStartedAt).toISOString(),
-        sessionDueIds: words.map(item => item.id),
-        sessionFailedIds: failedCardIds,
-        sessionCorrectIds: correctCardIds,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch('/api/words/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wordId: word.id,
+          itemKind: word.itemKind,
+          sourceLanguage,
+          targetLanguage,
+          userAnswer: value,
+          expectedReps: reviewedWord.reps,
+          responseTimeMs: Math.max(0, Date.now() - startedAt),
+          sessionRetry: isSessionRetry,
+          sessionStartedAt: new Date(sessionStartedAt).toISOString(),
+          sessionDueIds: words.map(item => item.id),
+          sessionFailedIds: failedCardIds,
+          sessionCorrectIds: correctCardIds,
+        }),
+      });
+    } catch (reason) {
+      if (reviewedWord.cardType !== 'recognition') throw reason;
+      setSelectedAnswer(null);
+      setSubmitError('Could not submit your answer. Please try again.');
+      return;
+    }
     if (response.status === 401) {
       router.replace('/login');
       return;
     }
-    const result = await response.json();
+    let result: { code?: string; isCorrect?: boolean };
+    try {
+      result = await response.json();
+    } catch (reason) {
+      if (reviewedWord.cardType !== 'recognition') throw reason;
+      setSelectedAnswer(null);
+      setSubmitError('Could not submit your answer. Please try again.');
+      return;
+    }
     if (!response.ok) {
       if (response.status === 409 && result.code === 'STALE_REVIEW') {
+        setSelectedAnswer(null);
         setStaleReviewMessage("That answer didn't go through - refreshing your cards");
         setAnswer('');
         window.setTimeout(() => {
@@ -213,6 +237,7 @@ export default function Review() {
         }, 900);
         return;
       }
+      setSelectedAnswer(null);
       setSubmitError('Could not submit your answer. Please try again.');
       return;
     }
@@ -225,8 +250,9 @@ export default function Review() {
       : correctCardIds;
     setFailedCardIds(failed);
     setCorrectCardIds(correct);
-    setFeedback({ correct: Boolean(result.isCorrect), translation: word.translation });
+    setFeedback({ correct: Boolean(result.isCorrect), translation: word.translation, answer: value });
     setTimeout(() => {
+      setSelectedAnswer(null);
       setFeedback(null);
       setAnswer('');
       const nextWordsLength = words.length + (result.isCorrect ? 0 : 1);
@@ -246,6 +272,21 @@ export default function Review() {
   const completionMessage = failedCardIds.length > 0
     ? 'Every failed card received a correct retry.'
     : 'All cards were answered correctly.';
+  function answerOptionClass(option: string) {
+    const isCorrectOption = option.trim().toLocaleLowerCase() === feedback?.translation.trim().toLocaleLowerCase();
+    if (feedback?.answer === option) {
+      return feedback.correct
+        ? 'border-2 border-positive bg-positive/10 text-positive-ink'
+        : 'border-2 border-accent bg-accent/15 text-ink';
+    }
+    if (feedback && !feedback.correct && isCorrectOption) {
+      return 'border-2 border-positive bg-positive/10 text-positive-ink';
+    }
+    if (selectedAnswer === option) {
+      return 'border-2 border-accent bg-accent/10 text-ink ring-2 ring-accent/30';
+    }
+    return 'border border-ink/15 bg-paper';
+  }
   if (loadError && !loading) {
     return <main className="shell grid-paper min-h-screen">
       <div className="mx-auto max-w-4xl px-3 py-3 sm:px-5 sm:py-6 md:px-10 md:py-9">
@@ -268,5 +309,5 @@ export default function Review() {
     </main>;
   }
 
-  return <main className="shell grid-paper min-h-screen"><div className="mx-auto max-w-4xl px-3 py-3 sm:px-5 sm:py-6 md:px-10 md:py-9"><header className="flex flex-wrap items-center justify-between gap-2 border-b border-ink/15 pb-3 sm:gap-3 sm:pb-6"><Link href="/learn" aria-label="LanguageRecap dashboard"><Brand className="h-7 w-auto sm:h-8" /></Link>  <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">  <button onClick={toggleMute} className="rounded-md border bg-surface px-2 py-1.5 text-xs font-bold sm:px-3 sm:py-2 sm:text-sm">{muted ? '🔇' : '🔊'}</button></div></header><div className="mx-auto max-w-xl py-5 sm:py-12"><Link href="/learn" className="text-xs font-bold text-muted sm:text-sm">← Dashboard</Link><div className="mt-4 flex items-end justify-between sm:mt-8"><div><span className="pill px-2 py-1 text-[10px] sm:px-3 sm:py-2 sm:text-xs">Recap · {pairLabel({ sourceLanguage, targetLanguage, words: 0 })}</span><h1 className="serif mt-2 text-3xl font-bold sm:mt-4 sm:text-5xl">Keep going.</h1></div>{word && <span className="text-xs font-bold text-muted sm:text-sm">{Math.min(index + 1, words.length)} / {words.length}</span>}</div>  {loading ? <p className="mt-10 text-sm text-muted">Loading...</p> : !pairs.length ? <section className="panel mt-5 p-6 text-center sm:mt-10 sm:p-10"><h2 className="serif text-2xl font-bold sm:text-3xl">No recap dictionaries yet.</h2><p className="mt-3 text-sm text-muted">Parse and save a lesson first.</p></section> : !word ? <section className="panel mt-5 p-6 text-center sm:mt-10 sm:p-10"><h2 className="serif text-2xl font-bold sm:text-3xl">{sessionComplete ? 'Session complete.' : "You're all caught up."}</h2><p className="mt-3 text-sm text-muted">{sessionComplete ? completionMessage : nextDueLabel ? `Next review at ${nextDueLabel}` : "You're all caught up."}</p></section> : <section className="panel mt-5 p-4 sm:mt-10 sm:p-7 md:p-10"><div className="flex justify-between text-[10px] font-bold uppercase tracking-[.12em] text-muted sm:text-xs sm:tracking-[.16em]"><span>{word.cardType === 'recognition' ? 'Choose translation' : `Type translation in ${source?.name || sourceLanguage}`}</span><span>Level {word.masteryLevel}</span></div><div className="py-8 text-center sm:py-14"><p className="serif text-4xl font-bold sm:text-5xl"><Split text={word.targetText} highlight={word.type.toLowerCase() === 'verb'} /></p><p className="mt-2 text-sm text-muted sm:mt-3">{word.type}</p></div>{word.cardType === 'recognition' ? <div className="grid gap-2 sm:gap-3">{word.options.map((option, i) => <button key={option} disabled={Boolean(staleReviewMessage)} onClick={() => submit(option)} className="rounded-md border bg-paper px-3 py-3 text-left text-sm font-bold sm:px-4 sm:py-4">{String.fromCharCode(65 + i)} <span className="ml-2 sm:ml-3">{option}</span></button>)}</div> : <div><input disabled={Boolean(staleReviewMessage)} autoFocus value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => event.key === 'Enter' && submit(answer)} placeholder={`Type the ${source?.name || sourceLanguage} translation...`} className="w-full rounded-md border bg-paper px-3 py-3 text-sm sm:px-4 sm:py-4" /><button disabled={Boolean(staleReviewMessage)} onClick={() => submit(answer)} className="mt-2 w-full rounded-md bg-ink px-3 py-3 text-sm font-bold text-white sm:mt-3 sm:px-4 sm:py-4">Check</button></div>  }{staleReviewMessage && <p role="status" className="mt-4 rounded-md border border-accent bg-accent/10 p-3 text-sm font-bold text-ink">{staleReviewMessage}</p>}{submitError && <p role="alert" className="mt-4 rounded-md border border-accent p-3 text-sm text-accent">{submitError}</p>}{feedback &&   <div className={`mt-4 rounded-md border p-3 text-sm ${feedback.correct ? 'border-positive text-positive' : 'border-accent text-accent'}`}><p className="font-bold">{feedback.correct ? 'Correct' : 'Wrong'}</p><p className="mt-1">Translation: <strong>{feedback.translation}</strong></p></div>}</section>}</div></div></main>;
+  return <main className="shell grid-paper min-h-screen"><div className="mx-auto max-w-4xl px-3 py-3 sm:px-5 sm:py-6 md:px-10 md:py-9"><header className="flex flex-wrap items-center justify-between gap-2 border-b border-ink/15 pb-3 sm:gap-3 sm:pb-6"><Link href="/learn" aria-label="LanguageRecap dashboard"><Brand className="h-7 w-auto sm:h-8" /></Link>  <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">  <button onClick={toggleMute} className="rounded-md border bg-surface px-2 py-1.5 text-xs font-bold sm:px-3 sm:py-2 sm:text-sm">{muted ? '🔇' : '🔊'}</button></div></header><div className="mx-auto max-w-xl py-5 sm:py-12"><Link href="/learn" className="text-xs font-bold text-muted sm:text-sm">← Dashboard</Link><div className="mt-4 flex items-end justify-between sm:mt-8"><div><span className="pill px-2 py-1 text-[10px] sm:px-3 sm:py-2 sm:text-xs">Recap · {pairLabel({ sourceLanguage, targetLanguage, words: 0 })}</span><h1 className="serif mt-2 text-3xl font-bold sm:mt-4 sm:text-5xl">Keep going.</h1></div>{word && <span className="text-xs font-bold text-muted sm:text-sm">{Math.min(index + 1, words.length)} / {words.length}</span>}</div>  {loading ? <p className="mt-10 text-sm text-muted">Loading...</p> : !pairs.length ? <section className="panel mt-5 p-6 text-center sm:mt-10 sm:p-10"><h2 className="serif text-2xl font-bold sm:text-3xl">No recap dictionaries yet.</h2><p className="mt-3 text-sm text-muted">Parse and save a lesson first.</p></section> : !word ? <section className="panel mt-5 p-6 text-center sm:mt-10 sm:p-10"><h2 className="serif text-2xl font-bold sm:text-3xl">{sessionComplete ? 'Session complete.' : "You're all caught up."}</h2><p className="mt-3 text-sm text-muted">{sessionComplete ? completionMessage : nextDueLabel ? `Next review at ${nextDueLabel}` : "You're all caught up."}</p></section> : <section className="panel mt-5 p-4 sm:mt-10 sm:p-7 md:p-10"><div className="flex justify-between text-[10px] font-bold uppercase tracking-[.12em] text-muted sm:text-xs sm:tracking-[.16em]"><span>{word.cardType === 'recognition' ? 'Choose translation' : `Type translation in ${source?.name || sourceLanguage}`}</span><span>Level {word.masteryLevel}</span></div><div className="py-8 text-center sm:py-14"><p className="serif text-4xl font-bold sm:text-5xl"><Split text={word.targetText} highlight={word.type.toLowerCase() === 'verb'} /></p><p className="mt-2 text-sm text-muted sm:mt-3">{word.type}</p></div>{word.cardType === 'recognition' ? <div className="grid gap-2 sm:gap-3">{word.options.map((option, i) => <button key={option} disabled={Boolean(staleReviewMessage)} onClick={() => submit(option)} className={`flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-3 py-3 text-left text-sm font-bold transition-colors sm:px-4 sm:py-4 ${answerOptionClass(option)}`}><span className="shrink-0">{String.fromCharCode(65 + i)}</span><span className="min-w-0 flex-1">{option}</span>{!feedback && selectedAnswer === option && <span className="text-right text-xs font-bold sm:text-sm">Checking...</span>}{feedback?.answer === option && feedback.correct && <span className="text-right text-xs font-bold sm:text-sm">Your answer: Correct</span>}{feedback?.answer === option && !feedback.correct && <span className="basis-full pl-5 text-left text-xs font-bold sm:text-sm">Wrong · Correct answer: {feedback.translation}</span>}{feedback && !feedback.correct && feedback.answer !== option && option.trim().toLocaleLowerCase() === feedback.translation.trim().toLocaleLowerCase() && <span className="text-right text-xs font-bold sm:text-sm">Correct answer</span>}</button>)}</div> : <div><input disabled={Boolean(staleReviewMessage)} autoFocus value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => event.key === 'Enter' && submit(answer)} placeholder={`Type the ${source?.name || sourceLanguage} translation...`} className="w-full rounded-md border bg-paper px-3 py-3 text-sm sm:px-4 sm:py-4" /><button disabled={Boolean(staleReviewMessage)} onClick={() => submit(answer)} className="mt-2 w-full rounded-md bg-ink px-3 py-3 text-sm font-bold text-white sm:mt-3 sm:px-4 sm:py-4">Check</button></div>  }{staleReviewMessage && <p role="status" className="mt-4 rounded-md border border-accent bg-accent/10 p-3 text-sm font-bold text-ink">{staleReviewMessage}</p>}{submitError && <p role="alert" className="mt-4 rounded-md border border-accent p-3 text-sm text-accent">{submitError}</p>}{feedback && word.cardType !== 'recognition' && <div className={`mt-4 rounded-md border p-3 text-sm ${feedback.correct ? 'border-positive text-positive' : 'border-accent text-accent'}`}><p className="font-bold">{feedback.correct ? 'Correct' : 'Wrong'}</p><p className="mt-1">Translation: <strong>{feedback.translation}</strong></p></div>}</section>}</div></div></main>;
 }

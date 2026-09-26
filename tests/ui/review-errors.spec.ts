@@ -148,3 +148,84 @@ test('a review submission 401 redirects to login instead of showing wrong-answer
   await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
   await expect(page.getByText('Wrong')).toHaveCount(0);
 });
+
+test('a tapped answer is highlighted immediately and stays marked when correct feedback arrives', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.route('**/api/words/review?*', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(reviewQueue),
+  }));
+
+  let releaseSubmission: () => void = () => {};
+  const submissionDelay = new Promise<void>(resolve => {
+    releaseSubmission = resolve;
+  });
+  await page.route('**/api/words/review', async route => {
+    await submissionDelay;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ isCorrect: true }),
+    });
+  });
+
+  await page.goto('/review');
+  const selectedOption = page.getByRole('button', { name: /A to go/ });
+  await selectedOption.click();
+  await expect(selectedOption).toContainText('Checking...');
+  await expect(selectedOption).toHaveClass(/border-accent/);
+
+  releaseSubmission();
+  await expect(selectedOption).toContainText('Your answer: Correct');
+  await expect(selectedOption).toHaveClass(/border-positive/);
+});
+
+test('wrong feedback shows the correct answer beside the selected choice on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.route('**/api/words/review?*', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(reviewQueue),
+  }));
+  await page.route('**/api/words/review', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ isCorrect: false }),
+  }));
+
+  await page.goto('/review');
+  const wrongOption = page.getByRole('button', { name: /B to be/ });
+  const correctOption = page.getByRole('button', { name: /A to go/ });
+  await wrongOption.click();
+  await expect(wrongOption).toContainText('Wrong · Correct answer: to go');
+  await expect(wrongOption).toHaveClass(/border-accent/);
+  await expect(correctOption).toContainText('Correct answer');
+  await expect(correctOption).toHaveClass(/border-positive/);
+  await expect(page.getByText('Translation: to go')).toHaveCount(0);
+  const inlineCorrection = page.getByText('Wrong · Correct answer: to go');
+  await expect(inlineCorrection).toBeVisible();
+  const correctionBounds = await inlineCorrection.boundingBox();
+  expect(correctionBounds).not.toBeNull();
+  expect(correctionBounds!.y + correctionBounds!.height).toBeLessThan(812);
+
+  await expect(inlineCorrection).toHaveCount(0, { timeout: 3000 });
+  await expect(page.getByRole('heading', { name: 'Keep going.' })).toBeVisible();
+  await expect(wrongOption).toHaveClass(/bg-paper/);
+  await expect(wrongOption).not.toHaveClass(/border-accent|border-positive/);
+});
+
+test('typed-answer feedback keeps the expected translation panel', async ({ page }) => {
+  await page.route('**/api/words/review?*', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ...reviewQueue,
+      words: [{ ...reviewCard, cardType: 'production' }],
+    }),
+  }));
+  await page.route('**/api/words/review', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ isCorrect: false }),
+  }));
+
+  await page.goto('/review');
+  await page.getByPlaceholder('Type the English translation...').fill('to be');
+  await page.getByRole('button', { name: 'Check' }).click();
+  await expect(page.getByText('Translation: to go')).toBeVisible();
+});
